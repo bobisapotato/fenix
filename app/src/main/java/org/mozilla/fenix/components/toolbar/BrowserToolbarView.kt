@@ -24,11 +24,13 @@ import kotlinx.android.synthetic.main.component_browser_top_toolbar.view.*
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import mozilla.components.browser.domains.autocomplete.ShippedDomainsProvider
 import mozilla.components.browser.session.Session
+import mozilla.components.browser.state.selector.selectedTab
 import mozilla.components.browser.state.state.ExternalAppType
 import mozilla.components.browser.toolbar.BrowserToolbar
 import mozilla.components.browser.toolbar.behavior.BrowserToolbarBottomBehavior
 import mozilla.components.browser.toolbar.display.DisplayToolbar
 import mozilla.components.support.utils.URLStringUtils
+import mozilla.components.ui.tabcounter.TabCounterMenu
 import org.mozilla.fenix.R
 import org.mozilla.fenix.customtabs.CustomTabToolbarIntegration
 import org.mozilla.fenix.customtabs.CustomTabToolbarMenu
@@ -97,7 +99,6 @@ class BrowserToolbarView(
         }
 
         with(container.context) {
-            val sessionManager = components.core.sessionManager
             val isPinningSupported = components.useCases.webAppUseCases.isPinningSupported()
 
             if (toolbarPosition == ToolbarPosition.TOP) {
@@ -150,7 +151,11 @@ class BrowserToolbarView(
                     menu = primaryTextColor,
                     hint = secondaryTextColor,
                     separator = separatorColor,
-                    trackingProtection = primaryTextColor
+                    trackingProtection = primaryTextColor,
+                    highlight = ContextCompat.getColor(
+                        context,
+                        R.color.whats_new_notification_color
+                    )
                 )
 
                 display.hint = context.getString(R.string.search_hint)
@@ -159,9 +164,9 @@ class BrowserToolbarView(
             val menuToolbar: ToolbarMenu
             if (isCustomTabSession) {
                 menuToolbar = CustomTabToolbarMenu(
-                    this,
-                    sessionManager,
-                    customTabSession?.id,
+                    context = this,
+                    store = components.core.store,
+                    sessionId = customTabSession?.id,
                     shouldReverseItems = toolbarPosition == ToolbarPosition.TOP,
                     onItemTapped = {
                         it.performHapticIfNeeded(view)
@@ -178,7 +183,6 @@ class BrowserToolbarView(
                         interactor.onBrowserToolbarMenuItemTapped(it)
                     },
                     lifecycleOwner = lifecycleOwner,
-                    sessionManager = sessionManager,
                     store = components.core.store,
                     bookmarksStorage = bookmarkStorage,
                     isPinningSupported = isPinningSupported
@@ -205,7 +209,7 @@ class BrowserToolbarView(
                     components.core.historyStorage,
                     lifecycleOwner,
                     sessionId = null,
-                    isPrivate = sessionManager.selectedSession?.private ?: false,
+                    isPrivate = components.core.store.state.selectedTab?.content?.private ?: false,
                     interactor = interactor,
                     engine = components.core.engine
                 )
@@ -265,10 +269,6 @@ class BrowserToolbarView(
                 }
             }
         }
-    }
-
-    companion object {
-        private const val TOOLBAR_ELEVATION = 16
     }
 
     @Suppress("ComplexCondition")

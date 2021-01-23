@@ -8,8 +8,8 @@ import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runBlockingTest
-import mozilla.components.browser.search.SearchEngine
 import mozilla.components.browser.session.Session
+import mozilla.components.browser.state.search.SearchEngine
 import org.junit.Before
 import org.junit.Test
 
@@ -100,10 +100,10 @@ class SearchDialogInteractorTest {
     fun onExistingSessionSelected() {
         val session = Session("http://mozilla.org", false)
 
-        interactor.onExistingSessionSelected(session)
+        interactor.onExistingSessionSelected(session.id)
 
         verify {
-            searchController.handleExistingSessionSelected(session)
+            searchController.handleExistingSessionSelected(session.id)
         }
     }
 

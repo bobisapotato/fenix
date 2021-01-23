@@ -22,10 +22,11 @@ import kotlinx.coroutines.launch
 import mozilla.appservices.Megazord
 import mozilla.components.browser.session.Session
 import mozilla.components.browser.state.action.SystemAction
+import mozilla.components.browser.state.selector.selectedTab
+import mozilla.components.concept.base.crash.Breadcrumb
 import mozilla.components.concept.push.PushProcessor
 import mozilla.components.feature.addons.update.GlobalAddonDependencyProvider
 import mozilla.components.lib.crash.CrashReporter
-import mozilla.components.service.experiments.Experiments
 import mozilla.components.service.glean.Glean
 import mozilla.components.service.glean.config.Configuration
 import mozilla.components.service.glean.net.ConceptFetchHttpUploader
@@ -41,14 +42,15 @@ import mozilla.components.support.webextensions.WebExtensionSupport
 import org.mozilla.fenix.components.Components
 import org.mozilla.fenix.components.metrics.MetricServiceType
 import org.mozilla.fenix.ext.settings
-import org.mozilla.fenix.perf.StorageStatsMetrics
 import org.mozilla.fenix.perf.StartupTimeline
+import org.mozilla.fenix.perf.StorageStatsMetrics
 import org.mozilla.fenix.perf.runBlockingIncrement
 import org.mozilla.fenix.push.PushFxaIntegration
 import org.mozilla.fenix.push.WebPushEngineIntegration
 import org.mozilla.fenix.session.PerformanceActivityLifecycleCallbacks
 import org.mozilla.fenix.session.VisibilityLifecycleCallback
 import org.mozilla.fenix.utils.BrowsersCache
+import java.util.concurrent.TimeUnit
 
 /**
  *The main application class for Fenix. Records data to measure initialization performance.
@@ -117,6 +119,13 @@ open class FenixApplication : LocaleAwareApplication(), Provider {
 
     @CallSuper
     open fun setupInMainProcessOnly() {
+        // See feature flags kdoc for details.
+        if (FeatureFlags.intentionalRegressionToValidatePerfTestAlerting) {
+            logger.info("Intentional thread sleep. See #17447")
+            @Suppress("MagicNumber") // it's fine for a quick patch.
+            Thread.sleep(100)
+        }
+
         run {
             // Attention: Do not invoke any code from a-s in this scope.
             val megazordSetup = setupMegazord()
@@ -130,7 +139,7 @@ open class FenixApplication : LocaleAwareApplication(), Provider {
                 components.core.engine.warmUp()
             }
             initializeWebExtensionSupport()
-
+            restoreBrowserState()
             restoreDownloads()
 
             // Just to make sure it is impossible for any application-services pieces
@@ -159,6 +168,20 @@ open class FenixApplication : LocaleAwareApplication(), Provider {
         components.appStartupTelemetry.onFenixApplicationOnCreate()
     }
 
+    private fun restoreBrowserState() = GlobalScope.launch(Dispatchers.Main) {
+        val store = components.core.store
+        val sessionStorage = components.core.sessionStorage
+
+        components.useCases.tabsUseCases.restore(sessionStorage, settings().getTabTimeout())
+
+        // Now that we have restored our previous state (if there's one) let's setup auto saving the state while
+        // the app is used.
+        sessionStorage.autoSave(store)
+            .periodicallyInForeground(interval = 30, unit = TimeUnit.SECONDS)
+            .whenGoingToBackground()
+            .whenSessionsChange()
+    }
+
     private fun restoreDownloads() {
         components.useCases.downloadUseCases.restoreDownloads()
     }
@@ -168,25 +191,6 @@ open class FenixApplication : LocaleAwareApplication(), Provider {
 
         fun initQueue() {
             registerActivityLifecycleCallbacks(PerformanceActivityLifecycleCallbacks(queue))
-        }
-
-        fun queueInitExperiments() {
-            @Suppress("ControlFlowWithEmptyBody")
-            if (settings().isExperimentationEnabled) {
-                queue.runIfReadyOrQueue {
-                    Experiments.initialize(
-                        applicationContext = applicationContext,
-                        onExperimentsUpdated = null,
-                        configuration = mozilla.components.service.experiments.Configuration(
-                            httpClient = components.core.client,
-                            kintoEndpoint = KINTO_ENDPOINT_PROD
-                        )
-                    )
-                }
-            } else {
-                // We should make a better way to opt out for when we have more experiments
-                // See https://github.com/mozilla-mobile/fenix/issues/6278
-            }
         }
 
         fun queueInitStorageAndServices() {
@@ -229,7 +233,6 @@ open class FenixApplication : LocaleAwareApplication(), Provider {
 
         // We init these items in the visual completeness queue to avoid them initing in the critical
         // startup path, before the UI finishes drawing (i.e. visual completeness).
-        queueInitExperiments()
         queueInitStorageAndServices()
         queueMetrics()
         queueReviewPrompt()
@@ -317,6 +320,21 @@ open class FenixApplication : LocaleAwareApplication(), Provider {
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
 
+        // Additional logging and breadcrumb to debug memory issues:
+        // https://github.com/mozilla-mobile/fenix/issues/12731
+
+        logger.info("onTrimMemory(), level=$level, main=${isMainProcess()}")
+
+        components.analytics.crashReporter.recordCrashBreadcrumb(Breadcrumb(
+            category = "Memory",
+            message = "onTrimMemory()",
+            data = mapOf(
+                "level" to level.toString(),
+                "main" to isMainProcess().toString()
+            ),
+            level = Breadcrumb.Level.INFO
+        ))
+
         runOnlyInMainProcess {
             components.core.icons.onTrimMemory(level)
             components.core.store.dispatch(SystemAction.LowMemoryAction(level))
@@ -388,7 +406,7 @@ open class FenixApplication : LocaleAwareApplication(), Provider {
                 onNewTabOverride = {
                     _, engineSession, url ->
                         val shouldCreatePrivateSession =
-                            components.core.sessionManager.selectedSession?.private
+                            components.core.store.state.selectedTab?.content?.private
                                 ?: components.settings.openLinksInAPrivateTab
 
                         val session = Session(url, shouldCreatePrivateSession)
@@ -399,9 +417,7 @@ open class FenixApplication : LocaleAwareApplication(), Provider {
                     _, sessionId -> components.useCases.tabsUseCases.removeTab(sessionId)
                 },
                 onSelectTabOverride = {
-                    _, sessionId ->
-                        val selected = components.core.sessionManager.findSessionById(sessionId)
-                        selected?.let { components.useCases.tabsUseCases.selectTab(it) }
+                    _, sessionId -> components.useCases.tabsUseCases.selectTab(sessionId)
                 },
                 onExtensionsLoaded = { extensions ->
                     components.addonUpdater.registerForFutureUpdates(extensions)
@@ -441,10 +457,6 @@ open class FenixApplication : LocaleAwareApplication(), Provider {
         } else {
             super.onConfigurationChanged(config)
         }
-    }
-
-    companion object {
-        private const val KINTO_ENDPOINT_PROD = "https://firefox.settings.services.mozilla.com/v1"
     }
 
     override fun getWorkManagerConfiguration() = Builder().setMinimumLoggingLevel(INFO).build()

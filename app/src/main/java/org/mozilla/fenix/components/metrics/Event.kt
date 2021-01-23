@@ -6,7 +6,7 @@ package org.mozilla.fenix.components.metrics
 
 import android.content.Context
 import mozilla.components.browser.errorpages.ErrorType
-import mozilla.components.browser.search.SearchEngine
+import mozilla.components.browser.state.search.SearchEngine
 import mozilla.components.feature.top.sites.TopSite
 import org.mozilla.fenix.GleanMetrics.Addons
 import org.mozilla.fenix.GleanMetrics.AppTheme
@@ -52,10 +52,6 @@ sealed class Event {
     object CustomTabsActionTapped : Event()
     object CustomTabsMenuOpened : Event()
     object UriOpened : Event()
-    object QRScannerOpened : Event()
-    object QRScannerPromptDisplayed : Event()
-    object QRScannerNavigationAllowed : Event()
-    object QRScannerNavigationDenied : Event()
     object SyncAuthOpened : Event()
     object SyncAuthClosed : Event()
     object SyncAuthSignUp : Event()
@@ -70,7 +66,6 @@ sealed class Event {
     object SyncAuthFromSharedReuse : Event()
     object SyncAuthFromSharedCopy : Event()
     object SyncAccountOpened : Event()
-    object SyncAccountClosed : Event()
     object SyncAccountSyncNow : Event()
     object SendTab : Event()
     object SignInToSendTab : Event()
@@ -98,11 +93,8 @@ sealed class Event {
     object FindInPageOpened : Event()
     object FindInPageClosed : Event()
     object FindInPageSearchCommitted : Event()
-    object PrivateBrowsingGarbageIconTapped : Event()
     object PrivateBrowsingSnackbarUndoTapped : Event()
     object PrivateBrowsingNotificationTapped : Event()
-    object PrivateBrowsingNotificationOpenTapped : Event()
-    object PrivateBrowsingNotificationDeleteAndOpenTapped : Event()
     object PrivateBrowsingCreateShortcut : Event()
     object PrivateBrowsingAddShortcutCFR : Event()
     object PrivateBrowsingCancelCFR : Event()
@@ -114,6 +106,8 @@ sealed class Event {
     object MediaPlayState : Event()
     object MediaPauseState : Event()
     object MediaStopState : Event()
+    object MediaFullscreenState : Event()
+    object MediaPictureInPictureState : Event()
     object InAppNotificationDownloadOpen : Event()
     object InAppNotificationDownloadTryAgain : Event()
     object NotificationDownloadCancel : Event()
@@ -121,6 +115,10 @@ sealed class Event {
     object NotificationDownloadPause : Event()
     object NotificationDownloadResume : Event()
     object NotificationDownloadTryAgain : Event()
+    object DownloadAdded : Event()
+    object DownloadsScreenOpened : Event()
+    object DownloadsItemOpened : Event()
+    object DownloadsItemDeleted : Event()
     object NotificationMediaPlay : Event()
     object NotificationMediaPause : Event()
     object TopSiteOpenDefault : Event()
@@ -157,7 +155,6 @@ sealed class Event {
     object OnboardingManualSignIn : Event()
     object OnboardingPrivacyNotice : Event()
     object OnboardingPrivateBrowsing : Event()
-    object OnboardingWhatsNew : Event()
     object OnboardingFinish : Event()
     object ChangedToDefaultBrowser : Event()
 
@@ -191,6 +188,17 @@ sealed class Event {
     object MasterPasswordMigrationDisplayed : Event()
 
     object TabSettingsOpened : Event()
+
+    object CopyUrlUsed : Event()
+
+    object SyncedTabOpened : Event()
+
+    object RecentlyClosedTabsOpened : Event()
+
+    object ContextMenuCopyTapped : Event()
+    object ContextMenuSearchTapped : Event()
+    object ContextMenuSelectAllTapped : Event()
+    object ContextMenuShareTapped : Event()
 
     // Interaction events with extras
 
@@ -413,7 +421,7 @@ sealed class Event {
             // https://github.com/mozilla-mobile/fenix/issues/1607
             // Sanitize identifiers for custom search engines.
             val identifier: String
-                get() = if (isCustom) "custom" else engine.identifier
+                get() = if (isCustom) "custom" else engine.id
 
             val searchEngine: SearchEngine
                 get() = when (this) {
@@ -504,7 +512,8 @@ sealed class Event {
                 "mozac.feature.contextmenu.save_image" to "save_image",
                 "mozac.feature.contextmenu.share_link" to "share_link",
                 "mozac.feature.contextmenu.copy_link" to "copy_link",
-                "mozac.feature.contextmenu.copy_image_location" to "copy_image_location"
+                "mozac.feature.contextmenu.copy_image_location" to "copy_image_location",
+                "mozac.feature.contextmenu.share_image" to "share_image"
             )
         }
     }

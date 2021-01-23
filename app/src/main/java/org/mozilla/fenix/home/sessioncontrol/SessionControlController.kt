@@ -12,10 +12,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import mozilla.components.browser.session.SessionManager
+import mozilla.components.browser.state.state.selectedOrDefaultSearchEngine
+import mozilla.components.browser.state.store.BrowserStore
 import mozilla.components.concept.engine.Engine
 import mozilla.components.concept.engine.prompt.ShareData
+import mozilla.components.feature.session.SessionUseCases
 import mozilla.components.feature.tab.collections.TabCollection
-import mozilla.components.feature.tab.collections.ext.restore
+import mozilla.components.feature.tab.collections.ext.invoke
 import mozilla.components.feature.tabs.TabsUseCases
 import mozilla.components.feature.top.sites.TopSite
 import mozilla.components.support.ktx.android.view.showKeyboard
@@ -34,7 +37,6 @@ import org.mozilla.fenix.ext.components
 import org.mozilla.fenix.ext.metrics
 import org.mozilla.fenix.ext.nav
 import org.mozilla.fenix.ext.sessionsOfType
-import org.mozilla.fenix.ext.settings
 import org.mozilla.fenix.home.HomeFragment
 import org.mozilla.fenix.home.HomeFragmentAction
 import org.mozilla.fenix.home.HomeFragmentDirections
@@ -158,6 +160,11 @@ interface SessionControlController {
      * @see [CollectionInteractor.onRemoveCollectionsPlaceholder]
      */
     fun handleRemoveCollectionsPlaceholder()
+
+    /**
+     * @see [CollectionInteractor.onCollectionMenuOpened] and [TopSiteInteractor.onTopSiteMenuOpened]
+     */
+    fun handleMenuOpened()
 }
 
 @Suppress("TooManyFunctions", "LargeClass")
@@ -167,8 +174,12 @@ class DefaultSessionControlController(
     private val engine: Engine,
     private val metrics: MetricController,
     private val sessionManager: SessionManager,
+    private val store: BrowserStore,
     private val tabCollectionStorage: TabCollectionStorage,
     private val addTabUseCase: TabsUseCases.AddNewTabUseCase,
+    private val restoreUseCase: TabsUseCases.RestoreUseCase,
+    private val reloadUrlUseCase: SessionUseCases.ReloadUrlUseCase,
+    private val selectTabUseCase: TabsUseCases.SelectTabUseCase,
     private val fragmentStore: HomeFragmentStore,
     private val navController: NavController,
     private val viewLifecycleScope: CoroutineScope,
@@ -193,13 +204,21 @@ class DefaultSessionControlController(
         )
     }
 
+    override fun handleMenuOpened() {
+        dismissSearchDialogIfDisplayed()
+    }
+
     override fun handleCollectionOpenTabClicked(tab: ComponentTab) {
-        sessionManager.restore(
+        dismissSearchDialogIfDisplayed()
+
+        restoreUseCase.invoke(
             activity,
             engine,
             tab,
             onTabRestored = {
                 activity.openToBrowser(BrowserDirection.FromHome)
+                sessionManager.selectedSession?.let { selectTabUseCase.invoke(it) }
+                reloadUrlUseCase.invoke(sessionManager.selectedSession)
             },
             onFailure = {
                 activity.openToBrowserAndLoad(
@@ -214,7 +233,7 @@ class DefaultSessionControlController(
     }
 
     override fun handleCollectionOpenTabsTapped(collection: TabCollection) {
-        sessionManager.restore(
+        restoreUseCase.invoke(
             activity,
             engine,
             collection,
@@ -256,6 +275,7 @@ class DefaultSessionControlController(
     }
 
     override fun handleCollectionShareTabsClicked(collection: TabCollection) {
+        dismissSearchDialogIfDisplayed()
         showShareFragment(
             collection.title,
             collection.tabs.map { ShareData(url = it.url, title = it.title) }
@@ -282,6 +302,7 @@ class DefaultSessionControlController(
     }
 
     override fun handlePrivateBrowsingLearnMoreClicked() {
+        dismissSearchDialogIfDisplayed()
         activity.openToBrowserAndLoad(
             searchTermOrURL = SupportUtils.getGenericSumoURLForTopic
                 (SupportUtils.SumoTopic.PRIVATE_BROWSING_MYTHS),
@@ -293,21 +314,18 @@ class DefaultSessionControlController(
     override fun handleRenameTopSiteClicked(topSite: TopSite) {
         activity.let {
             val customLayout =
-                    LayoutInflater.from(it).inflate(R.layout.top_sites_rename_dialog, null)
+                LayoutInflater.from(it).inflate(R.layout.top_sites_rename_dialog, null)
             val topSiteLabelEditText: EditText =
-                    customLayout.findViewById(R.id.top_site_title)
+                customLayout.findViewById(R.id.top_site_title)
             topSiteLabelEditText.setText(topSite.title)
 
             AlertDialog.Builder(it).apply {
                 setTitle(R.string.rename_top_site)
                 setView(customLayout)
                 setPositiveButton(R.string.top_sites_rename_dialog_ok) { dialog, _ ->
-                    val newTitle = topSiteLabelEditText.text.toString()
-                    if (newTitle.isNotBlank()) {
-                        viewLifecycleScope.launch(Dispatchers.IO) {
-                            with(activity.components.useCases.topSitesUseCase) {
-                                renameTopSites(topSite, newTitle)
-                            }
+                    viewLifecycleScope.launch(Dispatchers.IO) {
+                        with(activity.components.useCases.topSitesUseCase) {
+                            renameTopSites(topSite, topSiteLabelEditText.text.toString())
                         }
                     }
                     dialog.dismiss()
@@ -344,7 +362,10 @@ class DefaultSessionControlController(
     }
 
     override fun handleSelectTopSite(url: String, type: TopSite.Type) {
+        dismissSearchDialogIfDisplayed()
+
         metrics.track(Event.TopSiteOpenInNewTab)
+
         when (type) {
             TopSite.Type.DEFAULT -> metrics.track(Event.TopSiteOpenDefault)
             TopSite.Type.FRECENT -> metrics.track(Event.TopSiteOpenFrecent)
@@ -354,12 +375,36 @@ class DefaultSessionControlController(
         if (url == SupportUtils.POCKET_TRENDING_URL) {
             metrics.track(Event.PocketTopSiteClicked)
         }
+
         addTabUseCase.invoke(
-            url = url,
+            url = appendSearchAttributionToUrlIfNeeded(url),
             selectTab = true,
             startLoading = true
         )
         activity.openToBrowser(BrowserDirection.FromHome)
+    }
+
+    /**
+     * Append a search attribution query to any provided search engine URL based on the
+     * user's current region.
+     */
+    private fun appendSearchAttributionToUrlIfNeeded(url: String): String {
+        if (url == SupportUtils.GOOGLE_URL) {
+            store.state.search.region?.let { region ->
+                return when (region.current) {
+                    "US" -> SupportUtils.GOOGLE_US_URL
+                    else -> SupportUtils.GOOGLE_XX_URL
+                }
+            }
+        }
+
+        return url
+    }
+
+    private fun dismissSearchDialogIfDisplayed() {
+        if (navController.currentDestination?.id == R.id.searchDialogFragment) {
+            navController.navigateUp()
+        }
     }
 
     override fun handleStartBrowsingClicked() {
@@ -444,21 +489,23 @@ class DefaultSessionControlController(
     }
 
     override fun handlePasteAndGo(clipboardText: String) {
+        val searchEngine = store.state.search.selectedOrDefaultSearchEngine
+
         activity.openToBrowserAndLoad(
             searchTermOrURL = clipboardText,
             newTab = true,
             from = BrowserDirection.FromHome,
-            engine = activity.components.search.provider.getDefaultEngine(activity)
+            engine = searchEngine
         )
 
-        val event = if (clipboardText.isUrl()) {
+        val event = if (clipboardText.isUrl() || searchEngine == null) {
             Event.EnteredUrl(false)
         } else {
             val searchAccessPoint = Event.PerformedSearch.SearchAccessPoint.ACTION
             searchAccessPoint.let { sap ->
                 MetricsUtils.createSearchEvent(
-                    activity.components.search.provider.getDefaultEngine(activity),
-                    activity,
+                    searchEngine,
+                    store,
                     sap
                 )
             }

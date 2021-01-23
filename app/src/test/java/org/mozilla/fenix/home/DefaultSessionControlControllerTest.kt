@@ -12,13 +12,22 @@ import io.mockk.verify
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestCoroutineDispatcher
 import kotlinx.coroutines.test.TestCoroutineScope
-import mozilla.components.browser.search.SearchEngine
-import mozilla.components.browser.search.SearchEngineManager
+import mozilla.components.browser.session.Session
 import mozilla.components.browser.session.SessionManager
+import mozilla.components.browser.state.action.SearchAction
+import mozilla.components.browser.state.search.RegionState
+import mozilla.components.browser.state.search.SearchEngine
+import mozilla.components.browser.state.state.BrowserState
+import mozilla.components.browser.state.state.ReaderState
+import mozilla.components.browser.state.state.SearchState
+import mozilla.components.browser.state.state.recover.RecoverableTab
+import mozilla.components.browser.state.store.BrowserStore
 import mozilla.components.concept.engine.Engine
+import mozilla.components.feature.session.SessionUseCases
 import mozilla.components.feature.tab.collections.TabCollection
 import mozilla.components.feature.tabs.TabsUseCases
 import mozilla.components.feature.top.sites.TopSite
+import mozilla.components.support.test.ext.joinBlocking
 import mozilla.components.support.test.rule.MainCoroutineRule
 import org.junit.After
 import org.junit.Before
@@ -33,7 +42,6 @@ import org.mozilla.fenix.components.metrics.Event
 import org.mozilla.fenix.components.metrics.MetricController
 import org.mozilla.fenix.components.tips.Tip
 import org.mozilla.fenix.ext.components
-import org.mozilla.fenix.ext.searchEngineManager
 import org.mozilla.fenix.ext.settings
 import org.mozilla.fenix.home.sessioncontrol.DefaultSessionControlController
 import org.mozilla.fenix.settings.SupportUtils
@@ -56,6 +64,8 @@ class DefaultSessionControlControllerTest {
     private val engine: Engine = mockk(relaxed = true)
     private val tabCollectionStorage: TabCollectionStorage = mockk(relaxed = true)
     private val tabsUseCases: TabsUseCases = mockk(relaxed = true)
+    private val reloadUrlUseCase: SessionUseCases = mockk(relaxed = true)
+    private val selectTabUseCase: TabsUseCases = mockk(relaxed = true)
     private val hideOnboarding: () -> Unit = mockk(relaxed = true)
     private val registerCollectionStorageObserver: () -> Unit = mockk(relaxed = true)
     private val showTabTray: () -> Unit = mockk(relaxed = true)
@@ -67,16 +77,29 @@ class DefaultSessionControlControllerTest {
         wasSwiped: Boolean,
         handleSwipedItemDeletionCancel: () -> Unit
     ) -> Unit = mockk(relaxed = true)
-    private val searchEngine = mockk<SearchEngine>(relaxed = true)
-    private val searchEngineManager = mockk<SearchEngineManager>(relaxed = true)
     private val settings: Settings = mockk(relaxed = true)
     private val analytics: Analytics = mockk(relaxed = true)
     private val scope = TestCoroutineScope()
-
+    private val searchEngine = SearchEngine(
+        id = "test",
+        name = "Test Engine",
+        icon = mockk(relaxed = true),
+        type = SearchEngine.Type.BUNDLED,
+        resultUrls = listOf("https://example.org/?q={searchTerms}")
+    )
+    private lateinit var store: BrowserStore
     private lateinit var controller: DefaultSessionControlController
 
     @Before
     fun setup() {
+        store = BrowserStore(
+            BrowserState(
+                search = SearchState(
+                    regionSearchEngines = listOf(searchEngine)
+                )
+            )
+        )
+
         every { fragmentStore.state } returns HomeFragmentState(
             collections = emptyList(),
             expandedCollections = emptySet(),
@@ -90,21 +113,24 @@ class DefaultSessionControlControllerTest {
             every { id } returns R.id.homeFragment
         }
         every { activity.components.settings } returns settings
-        every { activity.components.search.provider.getDefaultEngine(activity) } returns searchEngine
         every { activity.settings() } returns settings
-        every { activity.searchEngineManager } returns searchEngineManager
-        every { searchEngineManager.defaultSearchEngine } returns searchEngine
         every { activity.components.analytics } returns analytics
         every { analytics.metrics } returns metrics
 
+        val restoreUseCase: TabsUseCases.RestoreUseCase = mockk(relaxed = true)
+
         controller = DefaultSessionControlController(
             activity = activity,
+            store = store,
             settings = settings,
             engine = engine,
             metrics = metrics,
             sessionManager = sessionManager,
             tabCollectionStorage = tabCollectionStorage,
             addTabUseCase = tabsUseCases.addTab,
+            reloadUrlUseCase = reloadUrlUseCase.reload,
+            selectTabUseCase = selectTabUseCase.selectTab,
+            restoreUseCase = restoreUseCase,
             fragmentStore = fragmentStore,
             navController = navController,
             viewLifecycleScope = scope,
@@ -132,7 +158,9 @@ class DefaultSessionControlControllerTest {
         verify { metrics.track(Event.CollectionAddTabPressed) }
         verify {
             navController.navigate(
-                match<NavDirections> { it.actionId == R.id.action_global_collectionCreationFragment },
+                match<NavDirections> {
+                    it.actionId == R.id.action_global_collectionCreationFragment
+                },
                 null
             )
         }
@@ -158,16 +186,31 @@ class DefaultSessionControlControllerTest {
 
     @Test
     fun `handleCollectionOpenTabClicked onTabRestored`() {
+        val restoredTab = RecoverableTab(
+            id = "test",
+            parentId = null,
+            url = "https://www.mozilla.org",
+            title = "Mozilla",
+            state = null,
+            contextId = null,
+            readerState = ReaderState(),
+            lastAccess = 0,
+            private = false
+        )
+
         val tab = mockk<ComponentTab> {
-            every { restore(activity, engine, restoreSessionId = false) } returns mockk {
-                every { session } returns mockk()
-                every { engineSessionState } returns mockk()
-            }
+            every { restore(activity, engine, restoreSessionId = false) } returns restoredTab
         }
+
+        val session = mockk<Session>()
+        every { sessionManager.selectedSession } returns session
+
         controller.handleCollectionOpenTabClicked(tab)
 
         verify { metrics.track(Event.CollectionTabRestored) }
         verify { activity.openToBrowser(BrowserDirection.FromHome) }
+        verify { selectTabUseCase.selectTab.invoke(session) }
+        verify { reloadUrlUseCase.reload.invoke(session) }
     }
 
     @Test
@@ -320,6 +363,120 @@ class DefaultSessionControlControllerTest {
     }
 
     @Test
+    fun handleSelectGoogleDefaultTopSiteUS() {
+        val topSiteUrl = SupportUtils.GOOGLE_URL
+
+        store.dispatch(SearchAction.SetRegionAction(RegionState("US", "US"))).joinBlocking()
+
+        controller.handleSelectTopSite(topSiteUrl, TopSite.Type.DEFAULT)
+        verify { metrics.track(Event.TopSiteOpenInNewTab) }
+        verify { metrics.track(Event.TopSiteOpenDefault) }
+        verify {
+            tabsUseCases.addTab.invoke(
+                url = SupportUtils.GOOGLE_US_URL,
+                selectTab = true,
+                startLoading = true
+            )
+        }
+        verify { activity.openToBrowser(BrowserDirection.FromHome) }
+    }
+
+    @Test
+    fun handleSelectGoogleDefaultTopSiteXX() {
+        val topSiteUrl = SupportUtils.GOOGLE_URL
+
+        store.dispatch(SearchAction.SetRegionAction(RegionState("DE", "FR"))).joinBlocking()
+
+        controller.handleSelectTopSite(topSiteUrl, TopSite.Type.DEFAULT)
+        verify { metrics.track(Event.TopSiteOpenInNewTab) }
+        verify { metrics.track(Event.TopSiteOpenDefault) }
+        verify {
+            tabsUseCases.addTab.invoke(
+                SupportUtils.GOOGLE_XX_URL,
+                selectTab = true,
+                startLoading = true
+            )
+        }
+        verify { activity.openToBrowser(BrowserDirection.FromHome) }
+    }
+
+    @Test
+    fun handleSelectGooglePinnedTopSiteUS() {
+        val topSiteUrl = SupportUtils.GOOGLE_URL
+
+        store.dispatch(SearchAction.SetRegionAction(RegionState("US", "US"))).joinBlocking()
+
+        controller.handleSelectTopSite(topSiteUrl, TopSite.Type.PINNED)
+        verify { metrics.track(Event.TopSiteOpenInNewTab) }
+        verify { metrics.track(Event.TopSiteOpenPinned) }
+        verify {
+            tabsUseCases.addTab.invoke(
+                SupportUtils.GOOGLE_US_URL,
+                selectTab = true,
+                startLoading = true
+            )
+        }
+        verify { activity.openToBrowser(BrowserDirection.FromHome) }
+    }
+
+    @Test
+    fun handleSelectGooglePinnedTopSiteXX() {
+        val topSiteUrl = SupportUtils.GOOGLE_URL
+
+        store.dispatch(SearchAction.SetRegionAction(RegionState("DE", "FR"))).joinBlocking()
+
+        controller.handleSelectTopSite(topSiteUrl, TopSite.Type.PINNED)
+        verify { metrics.track(Event.TopSiteOpenInNewTab) }
+        verify { metrics.track(Event.TopSiteOpenPinned) }
+        verify {
+            tabsUseCases.addTab.invoke(
+                SupportUtils.GOOGLE_XX_URL,
+                selectTab = true,
+                startLoading = true
+            )
+        }
+        verify { activity.openToBrowser(BrowserDirection.FromHome) }
+    }
+
+    @Test
+    fun handleSelectGoogleFrecentTopSiteUS() {
+        val topSiteUrl = SupportUtils.GOOGLE_URL
+
+        store.dispatch(SearchAction.SetRegionAction(RegionState("US", "US"))).joinBlocking()
+
+        controller.handleSelectTopSite(topSiteUrl, TopSite.Type.FRECENT)
+        verify { metrics.track(Event.TopSiteOpenInNewTab) }
+        verify { metrics.track(Event.TopSiteOpenFrecent) }
+        verify {
+            tabsUseCases.addTab.invoke(
+                SupportUtils.GOOGLE_US_URL,
+                selectTab = true,
+                startLoading = true
+            )
+        }
+        verify { activity.openToBrowser(BrowserDirection.FromHome) }
+    }
+
+    @Test
+    fun handleSelectGoogleFrecentTopSiteXX() {
+        val topSiteUrl = SupportUtils.GOOGLE_URL
+
+        store.dispatch(SearchAction.SetRegionAction(RegionState("DE", "FR"))).joinBlocking()
+
+        controller.handleSelectTopSite(topSiteUrl, TopSite.Type.FRECENT)
+        verify { metrics.track(Event.TopSiteOpenInNewTab) }
+        verify { metrics.track(Event.TopSiteOpenFrecent) }
+        verify {
+            tabsUseCases.addTab.invoke(
+                SupportUtils.GOOGLE_XX_URL,
+                selectTab = true,
+                startLoading = true
+            )
+        }
+        verify { activity.openToBrowser(BrowserDirection.FromHome) }
+    }
+
+    @Test
     fun handleStartBrowsingClicked() {
         controller.handleStartBrowsingClicked()
         verify { hideOnboarding() }
@@ -432,6 +589,32 @@ class DefaultSessionControlControllerTest {
         verify {
             settings.showCollectionsPlaceholderOnHome = false
             fragmentStore.dispatch(HomeFragmentAction.RemoveCollectionsPlaceholder)
+        }
+    }
+
+    @Test
+    fun handleMenuOpenedWhileSearchShowing() {
+        every { navController.currentDestination } returns mockk {
+            every { id } returns R.id.searchDialogFragment
+        }
+
+        controller.handleMenuOpened()
+
+        verify {
+            navController.navigateUp()
+        }
+    }
+
+    @Test
+    fun handleMenuOpenedWhileSearchNotShowing() {
+        every { navController.currentDestination } returns mockk {
+            every { id } returns R.id.homeFragment
+        }
+
+        controller.handleMenuOpened()
+
+        verify(exactly = 0) {
+            navController.navigateUp()
         }
     }
 }
