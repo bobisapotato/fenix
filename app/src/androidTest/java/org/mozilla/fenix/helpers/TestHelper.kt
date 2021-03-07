@@ -11,18 +11,16 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import androidx.preference.PreferenceManager
+import androidx.test.espresso.Espresso
 import androidx.test.espresso.Espresso.onView
-import androidx.test.espresso.ViewAction
-import androidx.test.espresso.action.CoordinatesProvider
-import androidx.test.espresso.action.GeneralClickAction
-import androidx.test.espresso.action.Press
-import androidx.test.espresso.action.Tap
+import androidx.test.espresso.IdlingRegistry
 import androidx.test.espresso.action.ViewActions.longClick
 import androidx.test.espresso.assertion.ViewAssertions
 import androidx.test.espresso.matcher.ViewMatchers.withId
 import androidx.test.espresso.matcher.ViewMatchers.withText
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiScrollable
 import androidx.test.uiautomator.UiSelector
 import androidx.test.uiautomator.Until
@@ -31,6 +29,7 @@ import org.hamcrest.CoreMatchers
 import org.hamcrest.CoreMatchers.allOf
 import org.mozilla.fenix.R
 import org.mozilla.fenix.helpers.ext.waitNotNull
+import org.mozilla.fenix.helpers.idlingresource.NetworkConnectionIdlingResource
 import org.mozilla.fenix.ui.robots.mDevice
 import java.io.File
 
@@ -108,22 +107,6 @@ object TestHelper {
         }
     }
 
-    fun sendSingleTapToScreen(x: Int, y: Int): ViewAction? {
-        return GeneralClickAction(
-            Tap.SINGLE,
-            CoordinatesProvider { view ->
-                val screenPos = IntArray(2)
-                view.getLocationOnScreen(screenPos)
-                val screenX = screenPos[0] + x.toFloat()
-                val screenY = screenPos[1] + y.toFloat()
-                floatArrayOf(screenX, screenY)
-            },
-            Press.FINGER,
-            0,
-            0
-        )
-    }
-
     // Remove test file from the device Downloads folder
     @Suppress("Deprecation")
     fun deleteDownloadFromStorage(fileName: String) {
@@ -135,6 +118,36 @@ object TestHelper {
 
             if (downloadedFile.exists()) {
                 downloadedFile.delete()
+            }
+        }
+    }
+
+    fun setNetworkEnabled(enabled: Boolean) {
+        val mDevice = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        val networkDisconnectedIdlingResource = NetworkConnectionIdlingResource(false)
+        val networkConnectedIdlingResource = NetworkConnectionIdlingResource(true)
+
+        when (enabled) {
+            true -> {
+                mDevice.executeShellCommand("svc data enable")
+                mDevice.executeShellCommand("svc wifi enable")
+
+                // Wait for network connection to be completely enabled
+                IdlingRegistry.getInstance().register(networkConnectedIdlingResource)
+                Espresso.onIdle {
+                    IdlingRegistry.getInstance().unregister(networkConnectedIdlingResource)
+                }
+            }
+
+            false -> {
+                mDevice.executeShellCommand("svc data disable")
+                mDevice.executeShellCommand("svc wifi disable")
+
+                // Wait for network connection to be completely disabled
+                IdlingRegistry.getInstance().register(networkDisconnectedIdlingResource)
+                Espresso.onIdle {
+                    IdlingRegistry.getInstance().unregister(networkDisconnectedIdlingResource)
+                }
             }
         }
     }

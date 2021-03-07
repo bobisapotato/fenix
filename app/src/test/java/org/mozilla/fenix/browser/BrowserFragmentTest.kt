@@ -87,13 +87,13 @@ class BrowserFragmentTest {
         every { browserFragment.onboarding } returns onboarding
 
         every { browserFragment.requireContext() } returns context
-        every { browserFragment.initializeUI(any()) } returns mockk()
+        every { browserFragment.initializeUI(any(), any()) } returns mockk()
         every { browserFragment.fullScreenChanged(any()) } returns Unit
         every { browserFragment.resumeDownloadDialogState(any(), any(), any(), any(), any()) } returns Unit
 
+        testTab = createTab(url = "https://mozilla.org")
         store = BrowserStore()
         every { context.components.core.store } returns store
-        testTab = createTab(url = "https://mozilla.org")
     }
 
     @After
@@ -122,10 +122,10 @@ class BrowserFragmentTest {
     @Test
     fun `GIVEN browser UI is not initialized WHEN selected tab changes THEN browser UI is initialized`() {
         browserFragment.observeTabSelection(store)
-        verify(exactly = 0) { browserFragment.initializeUI(view) }
+        verify(exactly = 0) { browserFragment.initializeUI(view, testTab) }
 
         addAndSelectTab(testTab)
-        verify(exactly = 1) { browserFragment.initializeUI(view) }
+        verify(exactly = 1) { browserFragment.initializeUI(view, testTab) }
     }
 
     @Test
@@ -344,6 +344,17 @@ class BrowserFragmentTest {
 
         verify(exactly = 1) { browserToolbar.invalidateActions() }
         verify(exactly = 1) { toolbarIntegration.invalidateMenu() }
+    }
+
+    @Test
+    fun `WHEN fragment configuration changed THEN menu is dismissed`() {
+        val browserToolbarView: BrowserToolbarView = mockk(relaxed = true)
+        every { browserFragment.context } returns null
+        browserFragment._browserToolbarView = browserToolbarView
+
+        browserFragment.onConfigurationChanged(mockk(relaxed = true))
+
+        verify(exactly = 1) { browserToolbarView.dismissMenu() }
     }
 
     private fun addAndSelectTab(tab: TabSessionState) {

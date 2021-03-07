@@ -10,13 +10,14 @@ import androidx.core.graphics.BlendModeCompat.SRC_IN
 import androidx.core.graphics.drawable.toBitmap
 import mozilla.components.browser.awesomebar.BrowserAwesomeBar
 import mozilla.components.browser.search.DefaultSearchEngineProvider
-import mozilla.components.browser.session.Session
 import mozilla.components.browser.state.search.SearchEngine
+import mozilla.components.browser.state.state.searchEngines
 import mozilla.components.concept.awesomebar.AwesomeBar
 import mozilla.components.concept.engine.EngineSession
 import mozilla.components.feature.awesomebar.provider.BookmarksStorageSuggestionProvider
 import mozilla.components.feature.awesomebar.provider.HistoryStorageSuggestionProvider
 import mozilla.components.feature.awesomebar.provider.SearchActionProvider
+import mozilla.components.feature.awesomebar.provider.SearchEngineSuggestionProvider
 import mozilla.components.feature.awesomebar.provider.SearchSuggestionProvider
 import mozilla.components.feature.awesomebar.provider.SessionSuggestionProvider
 import mozilla.components.feature.search.SearchUseCases
@@ -42,7 +43,8 @@ import mozilla.components.browser.search.SearchEngine as LegacySearchEngine
 class AwesomeBarView(
     private val activity: HomeActivity,
     val interactor: AwesomeBarInteractor,
-    val view: BrowserAwesomeBar
+    val view: BrowserAwesomeBar,
+    private val fromHomeFragment: Boolean
 ) {
     private val sessionProvider: SessionSuggestionProvider
     private val historyStorageProvider: HistoryStorageSuggestionProvider
@@ -51,6 +53,7 @@ class AwesomeBarView(
     private val syncedTabsStorageSuggestionProvider: SyncedTabsStorageSuggestionProvider
     private val defaultSearchSuggestionProvider: SearchSuggestionProvider
     private val defaultSearchActionProvider: SearchActionProvider
+    private val searchEngineSuggestionProvider: SearchEngineSuggestionProvider
     private val searchSuggestionProviderMap: MutableMap<SearchEngine, List<AwesomeBar.SuggestionProvider>>
     private var providersInUse = mutableSetOf<AwesomeBar.SuggestionProvider>()
 
@@ -85,10 +88,6 @@ class AwesomeBarView(
     }
 
     private val selectTabUseCase = object : TabsUseCases.SelectTabUseCase {
-        override fun invoke(session: Session) {
-            interactor.onExistingSessionSelected(session.id)
-        }
-
         override fun invoke(tabId: String) {
             interactor.onExistingSessionSelected(tabId)
         }
@@ -111,7 +110,7 @@ class AwesomeBarView(
                 selectTabUseCase,
                 components.core.icons,
                 getDrawable(activity, R.drawable.ic_search_results_tab),
-                excludeSelectedSession = true
+                excludeSelectedSession = !fromHomeFragment
             )
 
         historyStorageProvider =
@@ -147,6 +146,8 @@ class AwesomeBarView(
             colorFilter = createBlendModeColorFilterCompat(primaryTextColor, SRC_IN)
         }.toBitmap()
 
+        val searchWithBitmap = getDrawable(activity, R.drawable.ic_search_with)?.toBitmap()
+
         defaultSearchSuggestionProvider =
             SearchSuggestionProvider(
                 context = activity,
@@ -175,6 +176,16 @@ class AwesomeBarView(
                 context = activity,
                 selectShortcutEngine = interactor::onSearchShortcutEngineSelected,
                 selectShortcutEngineSettings = interactor::onClickSearchEngineSettings
+            )
+
+        searchEngineSuggestionProvider =
+            SearchEngineSuggestionProvider(
+                context = activity,
+                searchEnginesList = components.core.store.state.search.searchEngines,
+                selectShortcutEngine = interactor::onSearchEngineSuggestionSelected,
+                title = R.string.search_engine_suggestions_title,
+                description = activity.getString(R.string.search_engine_suggestions_description),
+                searchIcon = searchWithBitmap
             )
 
         searchSuggestionProviderMap = HashMap()
@@ -245,6 +256,8 @@ class AwesomeBarView(
         if (activity.browsingModeManager.mode == BrowsingMode.Normal) {
             providersToAdd.add(sessionProvider)
         }
+
+        providersToAdd.add(searchEngineSuggestionProvider)
 
         return providersToAdd
     }

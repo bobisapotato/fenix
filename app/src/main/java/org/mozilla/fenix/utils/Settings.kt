@@ -123,12 +123,6 @@ class Settings(private val appContext: Context) : PreferencesHolder {
     val canShowCfr: Boolean
         get() = (System.currentTimeMillis() - lastCfrShownTimeInMillis) > THREE_DAYS_MS
 
-    var syncedTabsInTabsTray by featureFlagPreference(
-        appContext.getPreferenceKey(R.string.pref_key_synced_tabs_tabs_tray),
-        default = false,
-        featureFlag = FeatureFlags.syncedTabsInTabsTray
-    )
-
     var forceEnableZoom by booleanPreference(
         appContext.getPreferenceKey(R.string.pref_key_accessibility_force_enable_zoom),
         default = false
@@ -252,6 +246,11 @@ class Settings(private val appContext: Context) : PreferencesHolder {
     val shouldShowSecurityPinWarning: Boolean
         get() = loginsSecureWarningCount.underMaxCount()
 
+    var shouldShowPrivacyPopWindow by booleanPreference(
+        appContext.getPreferenceKey(R.string.pref_key_privacy_pop_window),
+        default = true
+    )
+
     var shouldUseLightTheme by booleanPreference(
         appContext.getPreferenceKey(R.string.pref_key_light_theme),
         default = false
@@ -320,6 +319,12 @@ class Settings(private val appContext: Context) : PreferencesHolder {
     var closeTabsAfterOneMonth by booleanPreference(
         appContext.getPreferenceKey(R.string.pref_key_close_tabs_after_one_month),
         default = false
+    )
+
+    var tabsTrayRewrite by featureFlagPreference(
+        appContext.getPreferenceKey(R.string.pref_key_new_tabs_tray),
+        default = false,
+        featureFlag = FeatureFlags.tabsTrayRewrite
     )
 
     fun getTabTimeout(): Long = when {
@@ -471,6 +476,13 @@ class Settings(private val appContext: Context) : PreferencesHolder {
         true
     )
 
+    /**
+     * Prefer to use a fixed top toolbar when:
+     * - a talkback service is enabled or
+     * - switch access is enabled.
+     *
+     * This is automatically inferred based on the current system status. Not a setting in our app.
+     */
     val shouldUseFixedTopToolbar: Boolean
         get() {
             return touchExplorationIsEnabled || switchServiceIsEnabled
@@ -963,5 +975,17 @@ class Settings(private val appContext: Context) : PreferencesHolder {
     var isSwipeToolbarToSwitchTabsEnabled by booleanPreference(
         appContext.getPreferenceKey(R.string.pref_key_swipe_toolbar_switch_tabs),
         default = true
+    )
+
+    var creditCardsFeature by featureFlagPreference(
+        appContext.getPreferenceKey(R.string.pref_key_show_credit_cards_feature),
+        default = false,
+        featureFlag = FeatureFlags.creditCardsFeature
+    )
+
+    var addressFeature by featureFlagPreference(
+        appContext.getPreferenceKey(R.string.pref_key_show_address_feature),
+        default = false,
+        featureFlag = FeatureFlags.addressesFeature
     )
 }

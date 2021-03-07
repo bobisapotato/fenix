@@ -6,12 +6,14 @@ package org.mozilla.fenix.home.sessioncontrol
 
 import android.view.LayoutInflater
 import android.widget.EditText
+import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AlertDialog
 import androidx.navigation.NavController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import mozilla.components.browser.session.SessionManager
+import mozilla.components.browser.state.selector.getNormalOrPrivateTabs
+import mozilla.components.browser.state.state.searchEngines
 import mozilla.components.browser.state.state.selectedOrDefaultSearchEngine
 import mozilla.components.browser.state.store.BrowserStore
 import mozilla.components.concept.engine.Engine
@@ -36,7 +38,6 @@ import org.mozilla.fenix.components.tips.Tip
 import org.mozilla.fenix.ext.components
 import org.mozilla.fenix.ext.metrics
 import org.mozilla.fenix.ext.nav
-import org.mozilla.fenix.ext.sessionsOfType
 import org.mozilla.fenix.home.HomeFragment
 import org.mozilla.fenix.home.HomeFragmentAction
 import org.mozilla.fenix.home.HomeFragmentDirections
@@ -173,7 +174,6 @@ class DefaultSessionControlController(
     private val settings: Settings,
     private val engine: Engine,
     private val metrics: MetricController,
-    private val sessionManager: SessionManager,
     private val store: BrowserStore,
     private val tabCollectionStorage: TabCollectionStorage,
     private val addTabUseCase: TabsUseCases.AddNewTabUseCase,
@@ -217,8 +217,8 @@ class DefaultSessionControlController(
             tab,
             onTabRestored = {
                 activity.openToBrowser(BrowserDirection.FromHome)
-                sessionManager.selectedSession?.let { selectTabUseCase.invoke(it) }
-                reloadUrlUseCase.invoke(sessionManager.selectedSession)
+                selectTabUseCase.invoke(it)
+                reloadUrlUseCase.invoke(it)
             },
             onFailure = {
                 activity.openToBrowserAndLoad(
@@ -325,7 +325,11 @@ class DefaultSessionControlController(
                 setPositiveButton(R.string.top_sites_rename_dialog_ok) { dialog, _ ->
                     viewLifecycleScope.launch(Dispatchers.IO) {
                         with(activity.components.useCases.topSitesUseCase) {
-                            renameTopSites(topSite, topSiteLabelEditText.text.toString())
+                            updateTopSites(
+                                topSite,
+                                topSiteLabelEditText.text.toString(),
+                                topSite.url
+                            )
                         }
                     }
                     dialog.dismiss()
@@ -372,8 +376,26 @@ class DefaultSessionControlController(
             TopSite.Type.PINNED -> metrics.track(Event.TopSiteOpenPinned)
         }
 
+        if (url == SupportUtils.GOOGLE_URL) {
+            metrics.track(Event.TopSiteOpenGoogle)
+        }
+
         if (url == SupportUtils.POCKET_TRENDING_URL) {
             metrics.track(Event.PocketTopSiteClicked)
+        }
+
+        if (SupportUtils.GOOGLE_URL.equals(url, true)) {
+            val availableEngines = getAvailableSearchEngines()
+
+            val searchAccessPoint = Event.PerformedSearch.SearchAccessPoint.TOPSITE
+            val event =
+                availableEngines.firstOrNull { engine -> engine.suggestUrl?.contains(url) == true }
+                    ?.let { searchEngine ->
+                        searchAccessPoint.let { sap ->
+                            MetricsUtils.createSearchEvent(searchEngine, store, sap)
+                        }
+                    }
+            event?.let { activity.metrics.track(it) }
         }
 
         addTabUseCase.invoke(
@@ -383,6 +405,15 @@ class DefaultSessionControlController(
         )
         activity.openToBrowser(BrowserDirection.FromHome)
     }
+
+    @VisibleForTesting
+    internal fun getAvailableSearchEngines() = activity
+        .components
+        .core
+        .store
+        .state
+        .search
+        .searchEngines
 
     /**
      * Append a search attribution query to any provided search engine URL based on the
@@ -457,8 +488,8 @@ class DefaultSessionControlController(
         // Only register the observer right before moving to collection creation
         registerCollectionStorageObserver()
 
-        val tabIds = sessionManager
-            .sessionsOfType(private = activity.browsingModeManager.mode.isPrivate)
+        val tabIds = store.state
+            .getNormalOrPrivateTabs(private = activity.browsingModeManager.mode.isPrivate)
             .map { session -> session.id }
             .toList()
             .toTypedArray()

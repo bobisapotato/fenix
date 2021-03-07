@@ -15,18 +15,23 @@ import androidx.test.espresso.action.ViewActions
 import androidx.test.espresso.action.ViewActions.pressImeActionButton
 import androidx.test.espresso.action.ViewActions.replaceText
 import androidx.test.espresso.action.ViewActions.typeText
+import androidx.test.espresso.assertion.ViewAssertions
 import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.contrib.RecyclerViewActions
 import androidx.test.espresso.matcher.ViewMatchers
 import androidx.test.espresso.matcher.ViewMatchers.hasDescendant
+import androidx.test.espresso.matcher.ViewMatchers.withContentDescription
 import androidx.test.espresso.matcher.ViewMatchers.withEffectiveVisibility
 import androidx.test.espresso.matcher.ViewMatchers.withId
+import androidx.test.espresso.matcher.ViewMatchers.withParent
 import androidx.test.espresso.matcher.ViewMatchers.withResourceName
 import androidx.test.espresso.matcher.ViewMatchers.withText
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.UiSelector
 import androidx.test.uiautomator.Until
+import org.hamcrest.CoreMatchers.allOf
 import org.hamcrest.CoreMatchers.anyOf
 import org.hamcrest.CoreMatchers.containsString
 import org.hamcrest.CoreMatchers.not
@@ -54,7 +59,21 @@ class NavigationToolbarRobot {
 
     fun verifyTabButtonShortcutMenuItems() = assertTabButtonShortcutMenuItems()
 
+    fun verifyReaderViewDetected(visible: Boolean = false) =
+        assertReaderViewDetected(visible)
+
+    fun verifyCloseReaderViewDetected(visible: Boolean = false) =
+        assertCloseReaderViewDetected(visible)
+
     fun typeSearchTerm(searchTerm: String) = awesomeBar().perform(typeText(searchTerm))
+
+    fun toggleReaderView() {
+        mDevice.findObject(UiSelector()
+            .resourceId("$packageName:id/mozac_browser_toolbar_page_actions"))
+            .waitForExists(waitingTime)
+
+        readerViewToggle().click()
+    }
 
     class Transition {
 
@@ -105,6 +124,30 @@ class NavigationToolbarRobot {
                     )
                 )
                     .check(matches(withEffectiveVisibility(ViewMatchers.Visibility.VISIBLE)))
+            }
+
+            BrowserRobot().interact()
+            return BrowserRobot.Transition()
+        }
+
+        fun openTabCrashReporter(interact: BrowserRobot.() -> Unit): BrowserRobot.Transition {
+            val crashUrl = "about:crashcontent"
+
+            sessionLoadedIdlingResource = SessionLoadedIdlingResource()
+
+            mDevice.waitNotNull(Until.findObject(By.res("$packageName:id/toolbar")),
+                waitingTime
+            )
+            urlBar().click()
+            mDevice.waitNotNull(
+                Until.findObject(By.res("$packageName:id/mozac_browser_toolbar_edit_url_view")),
+                waitingTime
+            )
+
+            awesomeBar().perform(replaceText(crashUrl), pressImeActionButton())
+
+            runWithIdleRes(sessionLoadedIdlingResource) {
+                mDevice.findObject(UiSelector().resourceId("$packageName:id/crash_tab_image"))
             }
 
             BrowserRobot().interact()
@@ -274,6 +317,41 @@ private fun tabTrayButton() = onView(withId(R.id.tab_button))
 private fun fillLinkButton() = onView(withId(R.id.fill_link_from_clipboard))
 private fun clearAddressBar() = onView(withId(R.id.mozac_browser_toolbar_clear_view))
 private fun goBackButton() = mDevice.pressBack()
+private fun readerViewToggle() =
+    onView(withParent(withId(R.id.mozac_browser_toolbar_page_actions)))
+
+private fun assertReaderViewDetected(visible: Boolean) {
+    mDevice.findObject(UiSelector()
+        .description("Reader view"))
+        .waitForExists(waitingTime)
+
+    onView(
+        allOf(
+            withParent(withId(R.id.mozac_browser_toolbar_page_actions)),
+            withContentDescription("Reader view")
+        )
+    ).check(
+        if (visible) matches(withEffectiveVisibility(ViewMatchers.Visibility.VISIBLE))
+        else ViewAssertions.doesNotExist()
+    )
+}
+
+private fun assertCloseReaderViewDetected(visible: Boolean) {
+    mDevice.findObject(UiSelector()
+        .description("Close reader view"))
+        .waitForExists(waitingTime)
+
+    onView(
+        allOf(
+            withParent(withId(R.id.mozac_browser_toolbar_page_actions)),
+            withContentDescription("Close reader view")
+        )
+    ).check(
+        if (visible) matches(withEffectiveVisibility(ViewMatchers.Visibility.VISIBLE))
+        else ViewAssertions.doesNotExist()
+    )
+}
+
 inline fun runWithIdleRes(ir: IdlingResource?, pendingCheck: () -> Unit) {
     try {
         IdlingRegistry.getInstance().register(ir)

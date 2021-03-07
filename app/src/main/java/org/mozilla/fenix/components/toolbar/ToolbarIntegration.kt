@@ -19,12 +19,11 @@ import mozilla.components.concept.engine.Engine
 import mozilla.components.concept.storage.HistoryStorage
 import mozilla.components.feature.tabs.toolbar.TabCounterToolbarButton
 import mozilla.components.feature.toolbar.ToolbarAutocompleteFeature
+import mozilla.components.feature.toolbar.ToolbarBehaviorController
 import mozilla.components.feature.toolbar.ToolbarFeature
 import mozilla.components.feature.toolbar.ToolbarPresenter
-import mozilla.components.lib.publicsuffixlist.PublicSuffixList
 import mozilla.components.support.base.feature.LifecycleAwareFeature
 import mozilla.components.support.ktx.android.view.hideKeyboard
-import org.mozilla.fenix.FeatureFlags
 import org.mozilla.fenix.R
 import org.mozilla.fenix.ext.components
 import org.mozilla.fenix.ext.settings
@@ -46,7 +45,7 @@ abstract class ToolbarIntegration(
         store,
         sessionId,
         ToolbarFeature.UrlRenderConfiguration(
-            PublicSuffixList(context),
+            context.components.publicSuffixList,
             ThemeManager.resolveAttribute(R.attr.primaryText, context),
             renderStyle = renderStyle
         )
@@ -54,6 +53,8 @@ abstract class ToolbarIntegration(
 
     private val menuPresenter =
         MenuPresenter(toolbar, context.components.core.store, sessionId)
+
+    private val toolbarController = ToolbarBehaviorController(toolbar, store, sessionId)
 
     init {
         toolbar.display.menuBuilder = toolbarMenu.menuBuilder
@@ -63,11 +64,13 @@ abstract class ToolbarIntegration(
     override fun start() {
         menuPresenter.start()
         toolbarPresenter.start()
+        toolbarController.start()
     }
 
     override fun stop() {
         menuPresenter.stop()
         toolbarPresenter.stop()
+        toolbarController.stop()
     }
 
     fun invalidateMenu() {
@@ -120,20 +123,16 @@ class DefaultToolbarIntegration(
                 listOf(
                     DisplayToolbar.Indicators.TRACKING_PROTECTION,
                     DisplayToolbar.Indicators.SECURITY,
-                    DisplayToolbar.Indicators.EMPTY
+                    DisplayToolbar.Indicators.EMPTY,
+                    DisplayToolbar.Indicators.HIGHLIGHT
                 )
             } else {
                 listOf(
                     DisplayToolbar.Indicators.SECURITY,
-                    DisplayToolbar.Indicators.EMPTY
+                    DisplayToolbar.Indicators.EMPTY,
+                    DisplayToolbar.Indicators.HIGHLIGHT
                 )
             }
-
-        if (FeatureFlags.permissionIndicatorsToolbar) {
-            toolbar.display.indicators += DisplayToolbar.Indicators.HIGHLIGHT
-        }
-
-        toolbar.display.displayIndicatorSeparator =
             context.settings().shouldUseTrackingProtection
 
         toolbar.display.icons = toolbar.display.icons.copy(
