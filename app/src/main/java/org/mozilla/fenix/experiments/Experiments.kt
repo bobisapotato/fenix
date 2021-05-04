@@ -8,6 +8,8 @@ class Experiments {
     companion object {
         const val A_A_NIMBUS_VALIDATION = "fenix-nimbus-validation-v3"
         const val BOOKMARK_ICON = "fenix-bookmark-list-icon"
+        const val ANDROID_KEYSTORE = "fenix-android-keystore"
+        const val DEFAULT_BROWSER = "fenix-default-browser"
     }
 }
 
@@ -17,5 +19,8 @@ class ExperimentBranch {
         const val CONTROL = "control"
         const val A1 = "a1"
         const val A2 = "a2"
+        const val DEFAULT_BROWSER_TOOLBAR_MENU = "default_browser_toolbar_menu"
+        const val DEFAULT_BROWSER_NEW_TAB_BANNER = "default_browser_newtab_banner"
+        const val DEFAULT_BROWSER_SETTINGS_MENU = "default_browser_settings_menu"
     }
 }

@@ -8,22 +8,29 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import androidx.core.net.toUri
+import com.google.android.play.core.review.ReviewManagerFactory
 import mozilla.components.feature.addons.AddonManager
 import mozilla.components.feature.addons.amo.AddonCollectionProvider
 import mozilla.components.feature.addons.migration.DefaultSupportedAddonsChecker
 import mozilla.components.feature.addons.migration.SupportedAddonsChecker
 import mozilla.components.feature.addons.update.AddonUpdater
 import mozilla.components.feature.addons.update.DefaultAddonUpdater
+import mozilla.components.feature.autofill.AutofillConfiguration
 import mozilla.components.feature.sitepermissions.SitePermissionsStorage
 import mozilla.components.lib.publicsuffixlist.PublicSuffixList
 import mozilla.components.support.migration.state.MigrationStore
 import org.mozilla.fenix.BuildConfig
 import org.mozilla.fenix.Config
 import org.mozilla.fenix.HomeActivity
-import org.mozilla.fenix.perf.StrictModeManager
+import org.mozilla.fenix.R
+import org.mozilla.fenix.autofill.AutofillUnlockActivity
 import org.mozilla.fenix.components.metrics.AppStartupTelemetry
 import org.mozilla.fenix.ext.components
 import org.mozilla.fenix.ext.settings
+import org.mozilla.fenix.perf.AppStartReasonProvider
+import org.mozilla.fenix.perf.StartupActivityLog
+import org.mozilla.fenix.perf.StartupStateProvider
+import org.mozilla.fenix.perf.StrictModeManager
 import org.mozilla.fenix.perf.lazyMonitored
 import org.mozilla.fenix.utils.ClipboardHandler
 import org.mozilla.fenix.utils.Mockable
@@ -64,7 +71,8 @@ class Components(private val context: Context) {
             core.sessionManager,
             core.store,
             core.webAppShortcutManager,
-            core.topSitesStorage
+            core.topSitesStorage,
+            core.bookmarksStorage
         )
     }
 
@@ -151,8 +159,23 @@ class Components(private val context: Context) {
 
     val reviewPromptController by lazyMonitored {
         ReviewPromptController(
-            context,
-            FenixReviewSettings(settings)
+            manager = ReviewManagerFactory.create(context),
+            reviewSettings = FenixReviewSettings(settings)
         )
     }
+
+    val autofillConfiguration by lazyMonitored {
+        AutofillConfiguration(
+            storage = core.passwordsStorage,
+            publicSuffixList = publicSuffixList,
+            unlockActivity = AutofillUnlockActivity::class.java,
+            confirmActivity = AutofillConfiguration::class.java,
+            applicationName = context.getString(R.string.app_name),
+            httpClient = core.client
+        )
+    }
+
+    val appStartReasonProvider by lazyMonitored { AppStartReasonProvider() }
+    val startupActivityLog by lazyMonitored { StartupActivityLog() }
+    val startupStateProvider by lazyMonitored { StartupStateProvider(startupActivityLog, appStartReasonProvider) }
 }

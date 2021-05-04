@@ -110,7 +110,6 @@ import org.mozilla.fenix.downloads.DynamicDownloadDialog
 import org.mozilla.fenix.ext.accessibilityManager
 import org.mozilla.fenix.ext.breadcrumb
 import org.mozilla.fenix.ext.components
-import org.mozilla.fenix.ext.enterToImmersiveMode
 import org.mozilla.fenix.ext.getPreferenceKey
 import org.mozilla.fenix.ext.hideToolbar
 import org.mozilla.fenix.ext.metrics
@@ -129,6 +128,10 @@ import java.lang.ref.WeakReference
 import mozilla.components.feature.session.behavior.EngineViewBrowserToolbarBehavior
 import mozilla.components.feature.webauthn.WebAuthnFeature
 import mozilla.components.support.base.feature.ActivityResultHandler
+import org.mozilla.fenix.ext.navigateBlockingForAsyncNavGraph
+import mozilla.components.support.ktx.android.view.enterToImmersiveMode
+import org.mozilla.fenix.GleanMetrics.PerfStartup
+import org.mozilla.fenix.ext.measureNoInline
 import mozilla.components.feature.session.behavior.ToolbarPosition as MozacToolbarPosition
 
 /**
@@ -197,7 +200,7 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
         inflater: LayoutInflater,
         container: ViewGroup?,
         savedInstanceState: Bundle?
-    ): View {
+    ): View = PerfStartup.baseBfragmentOnCreateView.measureNoInline {
         customTabSessionId = requireArguments().getString(EXTRA_SESSION_ID)
 
         // Diagnostic breadcrumb for "Display already aquired" crash:
@@ -220,10 +223,11 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
             )
         }
 
-        return view
+        view
     }
 
-    final override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+    final override fun onViewCreated(view: View, savedInstanceState: Bundle?) =
+            PerfStartup.baseBfragmentOnViewCreated.measureNoInline { // weird indentation to avoid breaking blame.
         initializeUI(view)
 
         if (customTabSessionId == null) {
@@ -240,6 +244,7 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
         }
 
         requireContext().accessibilityManager.addAccessibilityStateChangeListener(this)
+        Unit
     }
 
     private fun initializeUI(view: View) {
@@ -278,7 +283,8 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
         val readerMenuController = DefaultReaderModeController(
             readerViewFeature,
             view.readerViewControlsBar,
-            isPrivate = activity.browsingModeManager.mode.isPrivate
+            isPrivate = activity.browsingModeManager.mode.isPrivate,
+            onReaderModeChanged = { activity.finishActionMode() }
         )
         val browserToolbarController = DefaultBrowserToolbarController(
             store = store,
@@ -294,7 +300,7 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
                 thumbnailsFeature.get()?.requestScreenshot()
                 findNavController().nav(
                     R.id.browserFragment,
-                    BrowserFragmentDirections.actionGlobalTabTrayDialogFragment()
+                    getTrayDirection(context)
                 )
             },
             onCloseTab = { closedSession ->
@@ -366,8 +372,12 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
                 store = store,
                 sessionId = customTabSessionId,
                 stub = view.stubFindInPage,
-                engineView = view.engineView,
-                toolbar = browserToolbarView.view
+                engineView = engineView,
+                toolbarInfo = FindInPageIntegration.ToolbarInfo(
+                    browserToolbarView.view,
+                    !context.settings().shouldUseFixedTopToolbar && context.settings().isDynamicToolbarEnabled,
+                    !context.settings().shouldUseBottomToolbar
+                )
             ),
             owner = this,
             view = view
@@ -548,7 +558,7 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
                             showPage = true,
                             sessionId = getCurrentTab()?.id
                         )
-                        findNavController().navigate(directions)
+                        findNavController().navigateBlockingForAsyncNavGraph(directions)
                     }
                 },
                 onNeedToRequestPermissions = { permissions ->
@@ -559,7 +569,7 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
                     browserAnimator.captureEngineViewAndDrawStatically {
                         val directions =
                             NavGraphDirections.actionGlobalSavedLoginsAuthFragment()
-                        findNavController().navigate(directions)
+                        findNavController().navigateBlockingForAsyncNavGraph(directions)
                     }
                 }
             ),
@@ -847,12 +857,6 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
         view: View
     ): List<ContextMenuCandidate>
 
-    @CallSuper
-    override fun onStart() {
-        super.onStart()
-        sitePermissionWifiIntegration.get()?.maybeAddWifiConnectedListener()
-    }
-
     @VisibleForTesting
     internal fun observeRestoreComplete(store: BrowserStore, navController: NavController) {
         val activity = activity as HomeActivity
@@ -976,7 +980,7 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
     }
 
     override fun onBackLongPressed(): Boolean {
-        findNavController().navigate(
+        findNavController().navigateBlockingForAsyncNavGraph(
             NavGraphDirections.actionGlobalTabHistoryDialogFragment(
                 activeSessionId = customTabSessionId
             )
@@ -1277,6 +1281,17 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
             isDisplayedWithBrowserToolbar = true
         ).setText(DynamicDownloadDialog.getCannotOpenFileErrorMessage(context, downloadState))
             .show()
+    }
+
+    /**
+     * Retrieves the correct tray direction while using a feature flag.
+     *
+     * Remove this when [FeatureFlags.tabsTrayRewrite] is removed.
+     */
+    private fun getTrayDirection(context: Context) = if (context.settings().tabsTrayRewrite) {
+        BrowserFragmentDirections.actionGlobalTabsTrayFragment()
+    } else {
+        BrowserFragmentDirections.actionGlobalTabTrayDialogFragment()
     }
 
     companion object {

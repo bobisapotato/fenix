@@ -13,7 +13,6 @@ object Versions {
 
     const val sentry = "1.7.10"
     const val leakcanary = "2.4"
-    const val leanplum = "5.4.0"
     const val osslicenses_plugin = "0.9.5"
     const val detekt = "1.9.1"
     const val jna = "5.6.0"
@@ -76,12 +75,9 @@ object Deps {
     const val mozilla_concept_sync = "org.mozilla.components:concept-sync:${Versions.mozilla_android_components}"
 
     const val mozilla_browser_awesomebar = "org.mozilla.components:browser-awesomebar:${Versions.mozilla_android_components}"
-    const val mozilla_browser_engine_gecko_nightly = "org.mozilla.components:browser-engine-gecko-nightly:${Versions.mozilla_android_components}"
-    const val mozilla_browser_engine_gecko_beta = "org.mozilla.components:browser-engine-gecko-beta:${Versions.mozilla_android_components}"
-    const val mozilla_browser_engine_gecko_release = "org.mozilla.components:browser-engine-gecko:${Versions.mozilla_android_components}"
+    const val mozilla_browser_engine_gecko = "org.mozilla.components:browser-engine-gecko:${Versions.mozilla_android_components}"
     const val mozilla_browser_domains = "org.mozilla.components:browser-domains:${Versions.mozilla_android_components}"
     const val mozilla_browser_icons = "org.mozilla.components:browser-icons:${Versions.mozilla_android_components}"
-    const val mozilla_browser_search = "org.mozilla.components:browser-search:${Versions.mozilla_android_components}"
     const val mozilla_browser_session = "org.mozilla.components:browser-session:${Versions.mozilla_android_components}"
     const val mozilla_browser_session_storage = "org.mozilla.components:browser-session-storage:${Versions.mozilla_android_components}"
     const val mozilla_browser_state = "org.mozilla.components:browser-state:${Versions.mozilla_android_components}"
@@ -98,6 +94,7 @@ object Deps {
 
     const val mozilla_feature_accounts = "org.mozilla.components:feature-accounts:${Versions.mozilla_android_components}"
     const val mozilla_feature_app_links = "org.mozilla.components:feature-app-links:${Versions.mozilla_android_components}"
+    const val mozilla_feature_autofill = "org.mozilla.components:feature-autofill:${Versions.mozilla_android_components}"
     const val mozilla_feature_awesomebar = "org.mozilla.components:feature-awesomebar:${Versions.mozilla_android_components}"
     const val mozilla_feature_contextmenu = "org.mozilla.components:feature-contextmenu:${Versions.mozilla_android_components}"
     const val mozilla_feature_customtabs = "org.mozilla.components:feature-customtabs:${Versions.mozilla_android_components}"
@@ -131,6 +128,8 @@ object Deps {
 
     const val mozilla_service_digitalassetlinks =
         "org.mozilla.components:service-digitalassetlinks:${Versions.mozilla_android_components}"
+    const val mozilla_service_sync_autofill =
+        "org.mozilla.components:service-sync-autofill:${Versions.mozilla_android_components}"
     const val mozilla_service_sync_logins =
         "org.mozilla.components:service-sync-logins:${Versions.mozilla_android_components}"
     const val mozilla_service_firefox_accounts = "org.mozilla.components:service-firefox-accounts:${Versions.mozilla_android_components}"
@@ -162,9 +161,6 @@ object Deps {
 
     const val sentry = "io.sentry:sentry-android:${Versions.sentry}"
     const val leakcanary = "com.squareup.leakcanary:leakcanary-android:${Versions.leakcanary}"
-
-    const val leanplum_core = "com.leanplum:leanplum-core:${Versions.leanplum}"
-    const val leanplum_fcm = "com.leanplum:leanplum-fcm:${Versions.leanplum}"
 
     const val androidx_annotation = "androidx.annotation:annotation:${Versions.androidx_annotation}"
     const val androidx_biometric = "androidx.biometric:biometric:${Versions.androidx_biometric}"

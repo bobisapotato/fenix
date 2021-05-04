@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import mozilla.components.browser.state.selector.getNormalOrPrivateTabs
+import mozilla.components.browser.state.state.availableSearchEngines
 import mozilla.components.browser.state.state.searchEngines
 import mozilla.components.browser.state.state.selectedOrDefaultSearchEngine
 import mozilla.components.browser.state.store.BrowserStore
@@ -38,6 +39,7 @@ import org.mozilla.fenix.components.tips.Tip
 import org.mozilla.fenix.ext.components
 import org.mozilla.fenix.ext.metrics
 import org.mozilla.fenix.ext.nav
+import org.mozilla.fenix.ext.openSetDefaultBrowserOption
 import org.mozilla.fenix.home.HomeFragment
 import org.mozilla.fenix.home.HomeFragmentAction
 import org.mozilla.fenix.home.HomeFragmentDirections
@@ -166,6 +168,16 @@ interface SessionControlController {
      * @see [CollectionInteractor.onCollectionMenuOpened] and [TopSiteInteractor.onTopSiteMenuOpened]
      */
     fun handleMenuOpened()
+
+    /**
+     * @see [ExperimentCardInteractor.onSetDefaultBrowserClicked]
+     */
+    fun handleSetDefaultBrowser()
+
+    /**
+     * @see [ExperimentCardInteractor.onCloseExperimentCardClicked]
+     */
+    fun handleCloseExperimentCard()
 }
 
 @Suppress("TooManyFunctions", "LargeClass")
@@ -180,6 +192,7 @@ class DefaultSessionControlController(
     private val restoreUseCase: TabsUseCases.RestoreUseCase,
     private val reloadUrlUseCase: SessionUseCases.ReloadUrlUseCase,
     private val selectTabUseCase: TabsUseCases.SelectTabUseCase,
+    private val requestDesktopSiteUseCase: SessionUseCases.RequestDesktopSiteUseCase,
     private val fragmentStore: HomeFragmentStore,
     private val navController: NavController,
     private val viewLifecycleScope: CoroutineScope,
@@ -384,36 +397,35 @@ class DefaultSessionControlController(
             metrics.track(Event.PocketTopSiteClicked)
         }
 
-        if (SupportUtils.GOOGLE_URL.equals(url, true)) {
-            val availableEngines = getAvailableSearchEngines()
+        val availableEngines = getAvailableSearchEngines()
 
-            val searchAccessPoint = Event.PerformedSearch.SearchAccessPoint.TOPSITE
-            val event =
-                availableEngines.firstOrNull { engine -> engine.suggestUrl?.contains(url) == true }
-                    ?.let { searchEngine ->
-                        searchAccessPoint.let { sap ->
-                            MetricsUtils.createSearchEvent(searchEngine, store, sap)
-                        }
-                    }
-            event?.let { activity.metrics.track(it) }
-        }
+        val searchAccessPoint = Event.PerformedSearch.SearchAccessPoint.TOPSITE
+        val event =
+            availableEngines.firstOrNull {
+                    engine -> engine.resultUrls.firstOrNull { it.contains(url) } != null
+            }?.let {
+                    searchEngine -> searchAccessPoint.let { sap ->
+                    MetricsUtils.createSearchEvent(searchEngine, store, sap)
+                }
+            }
+        event?.let { activity.metrics.track(it) }
 
         addTabUseCase.invoke(
             url = appendSearchAttributionToUrlIfNeeded(url),
             selectTab = true,
             startLoading = true
         )
+
+        if (settings.openNextTabInDesktopMode) {
+            activity.handleRequestDesktopMode()
+        }
         activity.openToBrowser(BrowserDirection.FromHome)
     }
 
     @VisibleForTesting
-    internal fun getAvailableSearchEngines() = activity
-        .components
-        .core
-        .store
-        .state
-        .search
-        .searchEngines
+    internal fun getAvailableSearchEngines() =
+        activity.components.core.store.state.search.searchEngines +
+                activity.components.core.store.state.search.availableSearchEngines
 
     /**
      * Append a search attribution query to any provided search engine URL based on the
@@ -551,5 +563,17 @@ class DefaultSessionControlController(
             pastedText = clipboardText
         )
         navController.nav(R.id.homeFragment, directions)
+    }
+
+    override fun handleSetDefaultBrowser() {
+        settings.userDismissedExperimentCard = true
+        metrics.track(Event.SetDefaultBrowserNewTabClicked)
+        activity.openSetDefaultBrowserOption()
+    }
+
+    override fun handleCloseExperimentCard() {
+        settings.userDismissedExperimentCard = true
+        metrics.track(Event.CloseExperimentCardClicked)
+        fragmentStore.dispatch(HomeFragmentAction.RemoveSetDefaultBrowserCard)
     }
 }

@@ -80,22 +80,23 @@ class HistoryFragment : LibraryPageFragment<HistoryItem>(), UserInteractionHandl
             )
         }
         val historyController: HistoryController = DefaultHistoryController(
-            historyStore,
-            findNavController(),
-            resources,
-            FenixSnackbar.make(
+            store = historyStore,
+            navController = findNavController(),
+            resources = resources,
+            snackbar = FenixSnackbar.make(
                 view = view,
                 duration = FenixSnackbar.LENGTH_LONG,
                 isDisplayedWithBrowserToolbar = false
             ),
-            activity?.getSystemService(CLIPBOARD_SERVICE) as ClipboardManager,
-            lifecycleScope,
-            ::openItem,
-            ::displayDeleteAllDialog,
-            ::invalidateOptionsMenu,
-            ::deleteHistoryItems,
-            ::syncHistory,
-            requireComponents.analytics.metrics
+            clipboardManager = activity?.getSystemService(CLIPBOARD_SERVICE) as ClipboardManager,
+            scope = lifecycleScope,
+            openToBrowser = ::openItem,
+            openInNewTab = ::openItemAndShowTray,
+            displayDeleteAll = ::displayDeleteAllDialog,
+            invalidateOptionsMenu = ::invalidateOptionsMenu,
+            deleteHistoryItems = ::deleteHistoryItems,
+            syncHistory = ::syncHistory,
+            metrics = requireComponents.analytics.metrics
         )
         historyInteractor = HistoryInteractor(
             historyController
@@ -188,7 +189,7 @@ class HistoryFragment : LibraryPageFragment<HistoryItem>(), UserInteractionHandl
         }
         R.id.open_history_in_new_tabs_multi_select -> {
             openItemsInNewTab { selectedItem ->
-                requireComponents.analytics.metrics.track(Event.HistoryItemOpened)
+                requireComponents.analytics.metrics.track(Event.HistoryOpenedInNewTabs)
                 selectedItem.url
             }
 
@@ -197,7 +198,7 @@ class HistoryFragment : LibraryPageFragment<HistoryItem>(), UserInteractionHandl
         }
         R.id.open_history_in_private_tabs_multi_select -> {
             openItemsInNewTab(private = true) { selectedItem ->
-                requireComponents.analytics.metrics.track(Event.HistoryItemOpened)
+                requireComponents.analytics.metrics.track(Event.HistoryOpenedInPrivateTabs)
                 selectedItem.url
             }
 
@@ -216,7 +217,7 @@ class HistoryFragment : LibraryPageFragment<HistoryItem>(), UserInteractionHandl
         invokePendingDeletion()
         findNavController().nav(
             R.id.historyFragment,
-            HistoryFragmentDirections.actionGlobalTabTrayDialogFragment()
+            HistoryFragmentDirections.actionGlobalTabsTrayFragment()
         )
     }
 
@@ -247,16 +248,30 @@ class HistoryFragment : LibraryPageFragment<HistoryItem>(), UserInteractionHandl
         _historyView = null
     }
 
-    private fun openItem(item: HistoryItem, mode: BrowsingMode? = null) {
+    private fun openItem(item: HistoryItem) {
         requireComponents.analytics.metrics.track(Event.HistoryItemOpened)
-
-        mode?.let { (activity as HomeActivity).browsingModeManager.mode = it }
 
         (activity as HomeActivity).openToBrowserAndLoad(
             searchTermOrURL = item.url,
             newTab = true,
             from = BrowserDirection.FromHistory
         )
+    }
+
+    private fun openItemAndShowTray(item: HistoryItem, mode: BrowsingMode) {
+        when (mode.isPrivate) {
+            true -> requireComponents.analytics.metrics.track(Event.HistoryOpenedInPrivateTab)
+            false -> requireComponents.analytics.metrics.track(Event.HistoryOpenedInNewTab)
+        }
+
+        val homeActivity = activity as HomeActivity
+        homeActivity.browsingModeManager.mode = mode
+        homeActivity.components.useCases.tabsUseCases.let { tabsUseCases ->
+            val addTab = if (mode == BrowsingMode.Private) tabsUseCases.addPrivateTab else tabsUseCases.addTab
+            addTab.invoke(item.url)
+        }
+
+        showTabTray()
     }
 
     private fun displayDeleteAllDialog() {
@@ -300,10 +315,10 @@ class HistoryFragment : LibraryPageFragment<HistoryItem>(), UserInteractionHandl
         val directions = HistoryFragmentDirections.actionGlobalShareFragment(
             data = data.toTypedArray()
         )
-        navigate(directions)
+        navigateToHistoryFragment(directions)
     }
 
-    private fun navigate(directions: NavDirections) {
+    private fun navigateToHistoryFragment(directions: NavDirections) {
         invokePendingDeletion()
         findNavController().nav(
             R.id.historyFragment,

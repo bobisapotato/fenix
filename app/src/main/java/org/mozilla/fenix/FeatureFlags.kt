@@ -17,7 +17,7 @@ object FeatureFlags {
     /**
      * Enables the Nimbus experiments library.
      */
-    val nimbusExperiments = Config.channel.isNightlyOrDebug
+    const val nimbusExperiments = true
 
     /**
      * Enables the Addresses autofill feature.
@@ -37,10 +37,15 @@ object FeatureFlags {
     /**
      * Shows new three-dot toolbar menu design.
      */
-    val toolbarMenuFeature = Config.channel.isDebug
+    const val toolbarMenuFeature = true
 
     /**
      * Enables the tabs tray re-write with Synced Tabs.
      */
-    val tabsTrayRewrite = Config.channel.isNightlyOrDebug
+    const val tabsTrayRewrite = true
+
+    /**
+     * Enables the updated icon set look and feel.
+     */
+    val newIconSet = Config.channel.isNightlyOrDebug
 }

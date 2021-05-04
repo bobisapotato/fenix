@@ -8,13 +8,13 @@ import android.content.Context
 import mozilla.components.browser.session.SessionManager
 import mozilla.components.browser.state.store.BrowserStore
 import mozilla.components.concept.engine.Engine
+import mozilla.components.concept.storage.BookmarksStorage
 import mozilla.components.feature.app.links.AppLinksUseCases
 import mozilla.components.feature.contextmenu.ContextMenuUseCases
 import mozilla.components.feature.downloads.DownloadsUseCases
 import mozilla.components.feature.pwa.WebAppShortcutManager
 import mozilla.components.feature.pwa.WebAppUseCases
 import mozilla.components.feature.search.SearchUseCases
-import mozilla.components.feature.search.ext.toDefaultSearchEngineProvider
 import mozilla.components.feature.session.SessionUseCases
 import mozilla.components.feature.session.SettingsUseCases
 import mozilla.components.feature.session.TrackingProtectionUseCases
@@ -22,6 +22,8 @@ import mozilla.components.feature.tabs.CustomTabsUseCases
 import mozilla.components.feature.tabs.TabsUseCases
 import mozilla.components.feature.top.sites.TopSitesStorage
 import mozilla.components.feature.top.sites.TopSitesUseCases
+import mozilla.components.support.locale.LocaleUseCases
+import org.mozilla.fenix.components.bookmarks.BookmarksUseCase
 import org.mozilla.fenix.perf.lazyMonitored
 import org.mozilla.fenix.utils.Mockable
 
@@ -37,7 +39,8 @@ class UseCases(
     private val sessionManager: SessionManager,
     private val store: BrowserStore,
     private val shortcutManager: WebAppShortcutManager,
-    private val topSitesStorage: TopSitesStorage
+    private val topSitesStorage: TopSitesStorage,
+    private val bookmarksStorage: BookmarksStorage
 ) {
     /**
      * Use cases that provide engine interactions for a given browser session.
@@ -62,7 +65,6 @@ class UseCases(
     val searchUseCases by lazyMonitored {
         SearchUseCases(
             store,
-            store.toDefaultSearchEngineProvider(),
             tabsUseCases
         )
     }
@@ -88,4 +90,14 @@ class UseCases(
      * Use cases that provide top sites management.
      */
     val topSitesUseCase by lazyMonitored { TopSitesUseCases(topSitesStorage) }
+
+    /**
+     * Use cases that handle locale management.
+     */
+    val localeUseCases by lazyMonitored { LocaleUseCases(store) }
+
+    /**
+     * Use cases that provide bookmark management.
+     */
+    val bookmarksUseCases by lazyMonitored { BookmarksUseCase(bookmarksStorage) }
 }

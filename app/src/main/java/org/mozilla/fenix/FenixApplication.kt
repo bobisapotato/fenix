@@ -10,8 +10,10 @@ import android.os.Build.VERSION.SDK_INT
 import android.os.StrictMode
 import android.util.Log.INFO
 import androidx.annotation.CallSuper
+import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.getSystemService
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.work.Configuration.Builder
 import androidx.work.Configuration.Provider
 import kotlinx.coroutines.Deferred
@@ -23,7 +25,10 @@ import mozilla.appservices.Megazord
 import mozilla.components.browser.state.action.SystemAction
 import mozilla.components.browser.state.selector.selectedTab
 import mozilla.components.concept.base.crash.Breadcrumb
+import mozilla.components.concept.engine.webextension.WebExtension
+import mozilla.components.concept.engine.webextension.isUnsupported
 import mozilla.components.concept.push.PushProcessor
+import mozilla.components.feature.addons.migration.DefaultSupportedAddonsChecker
 import mozilla.components.feature.addons.update.GlobalAddonDependencyProvider
 import mozilla.components.lib.crash.CrashReporter
 import mozilla.components.service.glean.Glean
@@ -40,9 +45,12 @@ import mozilla.components.support.rustlog.RustLog
 import mozilla.components.support.utils.logElapsedTime
 import mozilla.components.support.webextensions.WebExtensionSupport
 import org.mozilla.fenix.GleanMetrics.GleanBuildInfo
+import org.mozilla.fenix.GleanMetrics.Metrics
 import org.mozilla.fenix.GleanMetrics.PerfStartup
 import org.mozilla.fenix.components.Components
 import org.mozilla.fenix.components.metrics.MetricServiceType
+import org.mozilla.fenix.components.metrics.SecurePrefsTelemetry
+import org.mozilla.fenix.ext.measureNoInline
 import org.mozilla.fenix.ext.settings
 import org.mozilla.fenix.perf.ProfilerMarkerFactProcessor
 import org.mozilla.fenix.perf.StartupTimeline
@@ -52,6 +60,7 @@ import org.mozilla.fenix.push.PushFxaIntegration
 import org.mozilla.fenix.push.WebPushEngineIntegration
 import org.mozilla.fenix.session.PerformanceActivityLifecycleCallbacks
 import org.mozilla.fenix.session.VisibilityLifecycleCallback
+import org.mozilla.fenix.telemetry.TelemetryLifecycleObserver
 import org.mozilla.fenix.utils.BrowsersCache
 import java.util.concurrent.TimeUnit
 
@@ -73,7 +82,10 @@ open class FenixApplication : LocaleAwareApplication(), Provider {
         private set
 
     override fun onCreate() {
-        val methodDurationTimerId = PerfStartup.applicationOnCreate.start() // DO NOT MOVE ANYTHING ABOVE HERE.
+        // We use start/stop instead of measure so we don't measure outside the main process.
+        val completeMethodDurationTimerId = PerfStartup.applicationOnCreate.start() // DO NOT MOVE ANYTHING ABOVE HERE.
+        val subsectionThroughGleanTimerId = PerfStartup.appOnCreateToGleanInit.start()
+
         super.onCreate()
 
         setupInAllProcesses()
@@ -94,10 +106,12 @@ open class FenixApplication : LocaleAwareApplication(), Provider {
             initializeGlean()
         }
 
+        PerfStartup.appOnCreateToGleanInit.stopAndAccumulate(subsectionThroughGleanTimerId)
+
         setupInMainProcessOnly()
 
-        // We use start/stop instead of measure so we don't measure outside the main process.
-        PerfStartup.applicationOnCreate.stopAndAccumulate(methodDurationTimerId) // DO NOT MOVE ANYTHING BELOW HERE.
+        // DO NOT MOVE ANYTHING BELOW THIS stop CALL.
+        PerfStartup.applicationOnCreate.stopAndAccumulate(completeMethodDurationTimerId)
     }
 
     protected open fun initializeGlean() {
@@ -115,6 +129,14 @@ open class FenixApplication : LocaleAwareApplication(), Provider {
             uploadEnabled = telemetryEnabled,
             buildInfo = GleanBuildInfo.buildInfo
         )
+
+        // Set this early to guarantee it's in every ping from here on.
+        Metrics.distributionId.set(
+            when (Config.channel.isMozillaOnline) {
+                true -> "MozillaOnline"
+                false -> "Mozilla"
+            }
+        )
     }
 
     @CallSuper
@@ -127,48 +149,57 @@ open class FenixApplication : LocaleAwareApplication(), Provider {
 
     @CallSuper
     open fun setupInMainProcessOnly() {
-        ProfilerMarkerFactProcessor.create { components.core.engine.profiler }.register()
+        PerfStartup.appOnCreateToMegazordInit.measureNoInline {
+            ProfilerMarkerFactProcessor.create { components.core.engine.profiler }.register()
 
-        run {
-            // Attention: Do not invoke any code from a-s in this scope.
-            val megazordSetup = setupMegazord()
+            run {
+                // Attention: Do not invoke any code from a-s in this scope.
+                val megazordSetup = setupMegazord()
 
-            setDayNightTheme()
-            components.strictMode.enableStrictMode(true)
-            warmBrowsersCache()
+                setDayNightTheme()
+                components.strictMode.enableStrictMode(true)
+                warmBrowsersCache()
 
-            // Make sure the engine is initialized and ready to use.
-            components.strictMode.resetAfter(StrictMode.allowThreadDiskReads()) {
-                components.core.engine.warmUp()
-            }
-            initializeWebExtensionSupport()
-            restoreBrowserState()
-            restoreDownloads()
+                // Make sure the engine is initialized and ready to use.
+                components.strictMode.resetAfter(StrictMode.allowThreadDiskReads()) {
+                    components.core.engine.warmUp()
+                }
+                initializeWebExtensionSupport()
+                restoreBrowserState()
+                restoreDownloads()
+                restoreLocale()
 
-            // Just to make sure it is impossible for any application-services pieces
-            // to invoke parts of itself that require complete megazord initialization
-            // before that process completes, we wait here, if necessary.
-            if (!megazordSetup.isCompleted) {
-                runBlockingIncrement { megazordSetup.await() }
+                // Just to make sure it is impossible for any application-services pieces
+                // to invoke parts of itself that require complete megazord initialization
+                // before that process completes, we wait here, if necessary.
+                if (!megazordSetup.isCompleted) {
+                    runBlockingIncrement { megazordSetup.await() }
+                }
             }
         }
 
-        setupLeakCanary()
-        startMetricsIfEnabled()
-        setupPush()
+        PerfStartup.appOnCreateToSetupInMain.measureNoInline {
+            setupLeakCanary()
+            startMetricsIfEnabled()
+            setupPush()
 
-        visibilityLifecycleCallback = VisibilityLifecycleCallback(getSystemService())
-        registerActivityLifecycleCallbacks(visibilityLifecycleCallback)
+            visibilityLifecycleCallback = VisibilityLifecycleCallback(getSystemService())
+            registerActivityLifecycleCallbacks(visibilityLifecycleCallback)
 
-        // Storage maintenance disabled, for now, as it was interfering with background migrations.
-        // See https://github.com/mozilla-mobile/fenix/issues/7227 for context.
-        // if ((System.currentTimeMillis() - settings().lastPlacesStorageMaintenance) > ONE_DAY_MILLIS) {
-        //    runStorageMaintenance()
-        // }
+            // Storage maintenance disabled, for now, as it was interfering with background migrations.
+            // See https://github.com/mozilla-mobile/fenix/issues/7227 for context.
+            // if ((System.currentTimeMillis() - settings().lastPlacesStorageMaintenance) > ONE_DAY_MILLIS) {
+            //    runStorageMaintenance()
+            // }
 
-        initVisualCompletenessQueueAndQueueTasks()
+            components.appStartReasonProvider.registerInAppOnCreate(this)
+            components.startupActivityLog.registerInAppOnCreate(this)
+            initVisualCompletenessQueueAndQueueTasks()
 
-        components.appStartupTelemetry.onFenixApplicationOnCreate()
+            ProcessLifecycleOwner.get().lifecycle.addObserver(TelemetryLifecycleObserver(components.core.store))
+
+            components.appStartupTelemetry.onFenixApplicationOnCreate()
+        }
     }
 
     private fun restoreBrowserState() = GlobalScope.launch(Dispatchers.Main) {
@@ -189,6 +220,10 @@ open class FenixApplication : LocaleAwareApplication(), Provider {
         components.useCases.downloadUseCases.restoreDownloads()
     }
 
+    private fun restoreLocale() {
+        components.useCases.localeUseCases.restore()
+    }
+
     private fun initVisualCompletenessQueueAndQueueTasks() {
         val queue = components.performance.visualCompletenessQueue.queue
 
@@ -205,6 +240,8 @@ open class FenixApplication : LocaleAwareApplication(), Provider {
                         components.core.bookmarksStorage.warmUp()
                         components.core.passwordsStorage.warmUp()
                     }
+
+                    SecurePrefsTelemetry(this@FenixApplication, components.analytics.experiments).startTests()
                 }
                 // Account manager initialization needs to happen on the main thread.
                 GlobalScope.launch(Dispatchers.Main) {
@@ -438,12 +475,27 @@ open class FenixApplication : LocaleAwareApplication(), Provider {
                 },
                 onExtensionsLoaded = { extensions ->
                     components.addonUpdater.registerForFutureUpdates(extensions)
-                    components.supportedAddonsChecker.registerForChecks()
+                    subscribeForNewAddonsIfNeeded(components.supportedAddonsChecker, extensions)
                 },
                 onUpdatePermissionRequest = components.addonUpdater::onUpdatePermissionRequest
             )
         } catch (e: UnsupportedOperationException) {
             Logger.error("Failed to initialize web extension support", e)
+        }
+    }
+
+    @VisibleForTesting
+    internal fun subscribeForNewAddonsIfNeeded(
+        checker: DefaultSupportedAddonsChecker,
+        installedExtensions: List<WebExtension>
+    ) {
+        val hasUnsupportedAddons = installedExtensions.any { it.isUnsupported() }
+        if (hasUnsupportedAddons) {
+            checker.registerForChecks()
+        } else {
+            // As checks are a persistent subscriptions, we have to make sure
+            // we remove any previous subscriptions.
+            checker.unregisterForChecks()
         }
     }
 
