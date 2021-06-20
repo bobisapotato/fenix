@@ -105,6 +105,7 @@ class HistoryFragment : LibraryPageFragment<HistoryItem>(), UserInteractionHandl
             view.historyLayout,
             historyInteractor
         )
+        showToolbar(getString(R.string.library_history))
 
         return view
     }
@@ -161,7 +162,6 @@ class HistoryFragment : LibraryPageFragment<HistoryItem>(), UserInteractionHandl
 
     override fun onResume() {
         super.onResume()
-        showToolbar(getString(R.string.library_history))
     }
 
     override fun onCreateOptionsMenu(menu: Menu, inflater: MenuInflater) {
@@ -266,10 +266,9 @@ class HistoryFragment : LibraryPageFragment<HistoryItem>(), UserInteractionHandl
 
         val homeActivity = activity as HomeActivity
         homeActivity.browsingModeManager.mode = mode
-        homeActivity.components.useCases.tabsUseCases.let { tabsUseCases ->
-            val addTab = if (mode == BrowsingMode.Private) tabsUseCases.addPrivateTab else tabsUseCases.addTab
-            addTab.invoke(item.url)
-        }
+        homeActivity.components.useCases.tabsUseCases.addTab.invoke(
+            item.url, private = (mode == BrowsingMode.Private)
+        )
 
         showTabTray()
     }

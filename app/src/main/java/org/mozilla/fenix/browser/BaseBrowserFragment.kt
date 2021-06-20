@@ -4,11 +4,14 @@
 
 package org.mozilla.fenix.browser
 
+import android.app.KeyguardManager
 import android.content.Context
+import android.content.DialogInterface
 import android.content.Intent
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
@@ -16,7 +19,9 @@ import android.view.ViewGroup
 import android.view.accessibility.AccessibilityManager
 import androidx.annotation.CallSuper
 import androidx.annotation.VisibleForTesting
+import androidx.appcompat.app.AlertDialog
 import androidx.coordinatorlayout.widget.CoordinatorLayout
+import androidx.core.content.getSystemService
 import androidx.core.net.toUri
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
@@ -65,6 +70,7 @@ import mozilla.components.feature.intent.ext.EXTRA_SESSION_ID
 import mozilla.components.feature.media.fullscreen.MediaSessionFullscreenFeature
 import mozilla.components.feature.privatemode.feature.SecureWindowFeature
 import mozilla.components.feature.prompts.PromptFeature
+import mozilla.components.feature.prompts.PromptFeature.Companion.PIN_REQUEST
 import mozilla.components.feature.prompts.share.ShareDelegate
 import mozilla.components.feature.readerview.ReaderViewFeature
 import mozilla.components.feature.search.SearchFeature
@@ -72,7 +78,7 @@ import mozilla.components.feature.session.FullScreenFeature
 import mozilla.components.feature.session.PictureInPictureFeature
 import mozilla.components.feature.session.SessionFeature
 import mozilla.components.feature.session.SwipeRefreshFeature
-import mozilla.components.feature.sitepermissions.SitePermissions
+import mozilla.components.concept.engine.permission.SitePermissions
 import mozilla.components.feature.sitepermissions.SitePermissionsFeature
 import mozilla.components.lib.state.ext.consumeFlow
 import mozilla.components.lib.state.ext.flowScoped
@@ -99,9 +105,7 @@ import org.mozilla.fenix.components.StoreProvider
 import org.mozilla.fenix.components.metrics.Event
 import org.mozilla.fenix.components.toolbar.BrowserFragmentState
 import org.mozilla.fenix.components.toolbar.BrowserFragmentStore
-import org.mozilla.fenix.components.toolbar.BrowserInteractor
 import org.mozilla.fenix.components.toolbar.BrowserToolbarView
-import org.mozilla.fenix.components.toolbar.BrowserToolbarViewInteractor
 import org.mozilla.fenix.components.toolbar.DefaultBrowserToolbarController
 import org.mozilla.fenix.components.toolbar.DefaultBrowserToolbarMenuController
 import org.mozilla.fenix.components.toolbar.ToolbarIntegration
@@ -131,7 +135,11 @@ import mozilla.components.support.base.feature.ActivityResultHandler
 import org.mozilla.fenix.ext.navigateBlockingForAsyncNavGraph
 import mozilla.components.support.ktx.android.view.enterToImmersiveMode
 import org.mozilla.fenix.GleanMetrics.PerfStartup
+import org.mozilla.fenix.components.toolbar.interactor.BrowserToolbarInteractor
+import org.mozilla.fenix.components.toolbar.interactor.DefaultBrowserToolbarInteractor
 import org.mozilla.fenix.ext.measureNoInline
+import org.mozilla.fenix.ext.secure
+import org.mozilla.fenix.settings.biometric.BiometricPromptFeature
 import mozilla.components.feature.session.behavior.ToolbarPosition as MozacToolbarPosition
 
 /**
@@ -147,9 +155,9 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
     private lateinit var browserFragmentStore: BrowserFragmentStore
     private lateinit var browserAnimator: BrowserAnimator
 
-    private var _browserInteractor: BrowserToolbarViewInteractor? = null
-    protected val browserInteractor: BrowserToolbarViewInteractor
-        get() = _browserInteractor!!
+    private var _browserToolbarInteractor: BrowserToolbarInteractor? = null
+    protected val browserToolbarInteractor: BrowserToolbarInteractor
+        get() = _browserToolbarInteractor!!
 
     @VisibleForTesting
     @Suppress("VariableNaming")
@@ -180,6 +188,7 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
         ViewBoundFeatureWrapper<MediaSessionFullscreenFeature>()
     private val searchFeature = ViewBoundFeatureWrapper<SearchFeature>()
     private val webAuthnFeature = ViewBoundFeatureWrapper<WebAuthnFeature>()
+    private val biometricPromptFeature = ViewBoundFeatureWrapper<BiometricPromptFeature>()
     private var pipFeature: PictureInPictureFeature? = null
 
     var customTabSessionId: String? = null
@@ -300,7 +309,7 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
                 thumbnailsFeature.get()?.requestScreenshot()
                 findNavController().nav(
                     R.id.browserFragment,
-                    getTrayDirection(context)
+                    BrowserFragmentDirections.actionGlobalTabsTrayFragment()
                 )
             },
             onCloseTab = { closedSession ->
@@ -348,7 +357,7 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
             browserStore = store
         )
 
-        _browserInteractor = BrowserInteractor(
+        _browserToolbarInteractor = DefaultBrowserToolbarInteractor(
             browserToolbarController,
             browserToolbarMenuController
         )
@@ -356,7 +365,7 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
         _browserToolbarView = BrowserToolbarView(
             container = view.browserLayout,
             toolbarPosition = context.settings().toolbarPosition,
-            interactor = browserInteractor,
+            interactor = browserToolbarInteractor,
             customTabSession = customTabSessionId?.let { store.state.findCustomTab(it) },
             lifecycleOwner = viewLifecycleOwner
         )
@@ -533,6 +542,21 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
             view = view
         )
 
+        biometricPromptFeature.set(
+            feature = BiometricPromptFeature(
+                context = context,
+                fragment = this,
+                onAuthFailure = {
+                    promptsFeature.get()?.onBiometricResult(isAuthenticated = false)
+                },
+                onAuthSuccess = {
+                    promptsFeature.get()?.onBiometricResult(isAuthenticated = true)
+                }
+            ),
+            owner = this,
+            view = view
+        )
+
         promptsFeature.set(
             feature = PromptFeature(
                 activity = activity,
@@ -544,6 +568,9 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
                 ),
                 isSaveLoginEnabled = {
                     context.settings().shouldPromptToSaveLogins
+                },
+                isCreditCardAutofillEnabled = {
+                    context.settings().shouldAutofillCreditCardDetails
                 },
                 loginExceptionStorage = context.components.core.loginExceptionStorage,
                 shareDelegate = object : ShareDelegate {
@@ -571,6 +598,15 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
                             NavGraphDirections.actionGlobalSavedLoginsAuthFragment()
                         findNavController().navigateBlockingForAsyncNavGraph(directions)
                     }
+                },
+                creditCardPickerView = creditCardSelectBar,
+                onManageCreditCards = {
+                    val directions =
+                        NavGraphDirections.actionGlobalCreditCardsSettingFragment()
+                    findNavController().navigateBlockingForAsyncNavGraph(directions)
+                },
+                onSelectCreditCard = {
+                    showBiometricPrompt(context)
                 }
             ),
             owner = this,
@@ -614,7 +650,7 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
         sitePermissionsFeature.set(
             feature = SitePermissionsFeature(
                 context = context,
-                storage = context.components.core.permissionStorage.permissionsStorage,
+                storage = context.components.core.geckoSitePermissionsStorage,
                 fragmentManager = parentFragmentManager,
                 promptsStyling = SitePermissionsFeature.PromptsStyling(
                     gravity = getAppropriateLayoutGravity(),
@@ -720,6 +756,66 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
         )
 
         initializeEngineView(toolbarHeight)
+    }
+
+    /**
+     * Shows a biometric prompt and fallback to prompting for the password.
+     */
+    private fun showBiometricPrompt(context: Context) {
+        if (BiometricPromptFeature.canUseFeature(context)) {
+            biometricPromptFeature.get()
+                ?.requestAuthentication(getString(R.string.credit_cards_biometric_prompt_unlock_message))
+            return
+        }
+
+        // Fallback to prompting for password with the KeyguardManager
+        val manager = context.getSystemService<KeyguardManager>()
+        if (manager?.isKeyguardSecure == true) {
+            showPinVerification(manager)
+        } else {
+            // Warn that the device has not been secured
+            if (context.settings().shouldShowSecurityPinWarning) {
+                showPinDialogWarning(context)
+            } else {
+                promptsFeature.get()?.onBiometricResult(isAuthenticated = true)
+            }
+        }
+    }
+
+    /**
+     * Shows a pin request prompt. This is only used when BiometricPrompt is unavailable.
+     */
+    @Suppress("Deprecation")
+    private fun showPinVerification(manager: KeyguardManager) {
+        val intent = manager.createConfirmDeviceCredentialIntent(
+            getString(R.string.credit_cards_biometric_prompt_message_pin),
+            getString(R.string.credit_cards_biometric_prompt_unlock_message)
+        )
+        requireActivity().startActivityForResult(intent, PIN_REQUEST)
+    }
+
+    /**
+     * Shows a dialog warning about setting up a device lock PIN.
+     */
+    private fun showPinDialogWarning(context: Context) {
+        AlertDialog.Builder(context).apply {
+            setTitle(getString(R.string.credit_cards_warning_dialog_title))
+            setMessage(getString(R.string.credit_cards_warning_dialog_message))
+
+            setNegativeButton(getString(R.string.credit_cards_warning_dialog_later)) { _: DialogInterface, _ ->
+                promptsFeature.get()?.onBiometricResult(isAuthenticated = false)
+            }
+
+            setPositiveButton(getString(R.string.credit_cards_warning_dialog_set_up_now)) { it: DialogInterface, _ ->
+                it.dismiss()
+                promptsFeature.get()?.onBiometricResult(isAuthenticated = false)
+                startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS))
+            }
+
+            create()
+        }.show().secure(activity)
+
+        context.settings().incrementSecureWarningCount()
     }
 
     @VisibleForTesting
@@ -1247,7 +1343,7 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
 
         requireContext().accessibilityManager.removeAccessibilityStateChangeListener(this)
         _browserToolbarView = null
-        _browserInteractor = null
+        _browserToolbarInteractor = null
     }
 
     override fun onAttach(context: Context) {
@@ -1281,17 +1377,6 @@ abstract class BaseBrowserFragment : Fragment(), UserInteractionHandler, Activit
             isDisplayedWithBrowserToolbar = true
         ).setText(DynamicDownloadDialog.getCannotOpenFileErrorMessage(context, downloadState))
             .show()
-    }
-
-    /**
-     * Retrieves the correct tray direction while using a feature flag.
-     *
-     * Remove this when [FeatureFlags.tabsTrayRewrite] is removed.
-     */
-    private fun getTrayDirection(context: Context) = if (context.settings().tabsTrayRewrite) {
-        BrowserFragmentDirections.actionGlobalTabsTrayFragment()
-    } else {
-        BrowserFragmentDirections.actionGlobalTabTrayDialogFragment()
     }
 
     companion object {
